@@ -1,0 +1,18 @@
+[submodule "weasel"]
+	path = weasel
+	url = https://github.com/rime/weasel
+[submodule "ibus-rime"]
+	path = ibus-rime
+	url = https://github.com/rime/ibus-rime
+[submodule "squirrel"]
+	path = squirrel
+	url = https://github.com/rime/squirrel
+[submodule "trime"]
+	path = trime
+	url = https://github.com/osfans/trime
+[submodule "librime"]
+	path = librime
+	url = https://github.com/rime/librime
+[submodule "rime-frost"]
+	path = rime-frost
+	url = https://github.com/gaboolic/rime-frost
