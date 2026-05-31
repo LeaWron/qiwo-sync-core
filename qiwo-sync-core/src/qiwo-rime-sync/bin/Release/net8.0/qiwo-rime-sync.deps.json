@@ -1,0 +1,39 @@
+{
+  "runtimeTarget": {
+    "name": ".NETCoreApp,Version=v8.0",
+    "signature": ""
+  },
+  "compilationOptions": {},
+  "targets": {
+    ".NETCoreApp,Version=v8.0": {
+      "qiwo-rime-sync/1.0.0": {
+        "dependencies": {
+          "Qiwo.Sync.Core": "1.0.0"
+        },
+        "runtime": {
+          "qiwo-rime-sync.dll": {}
+        }
+      },
+      "Qiwo.Sync.Core/1.0.0": {
+        "runtime": {
+          "Qiwo.Sync.Core.dll": {
+            "assemblyVersion": "1.0.0.0",
+            "fileVersion": "1.0.0.0"
+          }
+        }
+      }
+    }
+  },
+  "libraries": {
+    "qiwo-rime-sync/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "Qiwo.Sync.Core/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    }
+  }
+}

@@ -1,0 +1,7 @@
+D:\work\AIGen\MyIME\.qiwo-publish-test\qiwo-rime-sync.exe
+D:\work\AIGen\MyIME\.qiwo-publish-test\qiwo-rime-sync.dll
+D:\work\AIGen\MyIME\.qiwo-publish-test\qiwo-rime-sync.deps.json
+D:\work\AIGen\MyIME\.qiwo-publish-test\qiwo-rime-sync.runtimeconfig.json
+D:\work\AIGen\MyIME\.qiwo-publish-test\qiwo-rime-sync.pdb
+D:\work\AIGen\MyIME\.qiwo-publish-test\Qiwo.Sync.Core.dll
+D:\work\AIGen\MyIME\.qiwo-publish-test\Qiwo.Sync.Core.pdb
