@@ -16,7 +16,7 @@ jobs:
       BUILD_ABI: armeabi-v7a,arm64-v8a,x86,x86_64
     defaults:
       run:
-        working-directory: trime
+        working-directory: qiwo-trime
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -52,8 +52,8 @@ jobs:
         uses: actions/cache@v5
         id: jni-cache
         with:
-          path: trime/app/prebuilt
-          key: ${{ runner.os }}-trime-jni-debug-${{ steps.cache-hash.outputs.native-cache-hash }}
+          path: qiwo-trime/app/prebuilt
+          key: ${{ runner.os }}-qiwo-trime-jni-debug-${{ steps.cache-hash.outputs.native-cache-hash }}
 
       - name: Fetch submodules
         if: ${{ !steps.jni-cache.outputs.cache-hit }}
@@ -75,5 +75,5 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: Qiwo-Android-${{ env.CI_BRANCH }}
-          path: trime/app/build/outputs/apk/debug/
+          path: qiwo-trime/app/build/outputs/apk/debug/
           retention-days: 90
