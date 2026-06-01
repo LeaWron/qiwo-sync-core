@@ -4,11 +4,6 @@ namespace Qiwo.Sync.Core;
 
 public sealed class ManifestStore
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
-    {
-        WriteIndented = true
-    };
-
     private readonly DirectoryInfo _root;
 
     public ManifestStore(DirectoryInfo root)
@@ -28,7 +23,7 @@ public sealed class ManifestStore
         }
 
         await using var stream = file.OpenRead();
-        return await JsonSerializer.DeserializeAsync<SyncManifest>(stream, JsonOptions, cancellationToken)
+        return await JsonSerializer.DeserializeAsync(stream, SyncJsonContext.Default.SyncManifest, cancellationToken)
             ?? SyncManifest.Empty;
     }
 
@@ -38,16 +33,16 @@ public sealed class ManifestStore
         file.Directory?.Create();
 
         await using var stream = File.Create(file.FullName);
-        await JsonSerializer.SerializeAsync(stream, manifest, JsonOptions, cancellationToken);
+        await JsonSerializer.SerializeAsync(stream, manifest, SyncJsonContext.Default.SyncManifest, cancellationToken);
     }
 
     public static byte[] ToJsonBytes(SyncManifest manifest)
     {
-        return JsonSerializer.SerializeToUtf8Bytes(manifest, JsonOptions);
+        return JsonSerializer.SerializeToUtf8Bytes(manifest, SyncJsonContext.Default.SyncManifest);
     }
 
     public static SyncManifest FromJsonBytes(byte[] bytes)
     {
-        return JsonSerializer.Deserialize<SyncManifest>(bytes, JsonOptions) ?? SyncManifest.Empty;
+        return JsonSerializer.Deserialize(bytes, SyncJsonContext.Default.SyncManifest) ?? SyncManifest.Empty;
     }
 }

@@ -23,10 +23,7 @@ internal static class ProgramMain
 
             if (options.ContainsKey("json"))
             {
-                Console.WriteLine(JsonSerializer.Serialize(summary, new JsonSerializerOptions(JsonSerializerDefaults.Web)
-                {
-                    WriteIndented = true
-                }));
+                Console.WriteLine(JsonSerializer.Serialize(summary, SyncJsonContext.Default.SyncSummary));
             }
             else
             {
