@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - dev/**
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore
+        run: dotnet restore Qiwo.Sync.sln
+
+      - name: Build
+        run: dotnet build Qiwo.Sync.sln --configuration Release --no-restore
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        runtime:
+          - linux-x64
+          - osx-arm64
+          - osx-x64
+          - win-x64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Publish
+        run: |
+          dotnet publish src/qiwo-rime-sync/qiwo-rime-sync.csproj \
+            --configuration Release \
+            --runtime ${{ matrix.runtime }} \
+            --self-contained true \
+            -p:PublishSingleFile=true \
+            -p:PublishTrimmed=true \
+            -o publish/${{ matrix.runtime }}
+
+      - name: Pack artifact
+        run: |
+          mkdir -p artifacts
+          if [[ "${{ matrix.runtime }}" == win-* ]]; then
+            (cd publish/${{ matrix.runtime }} && zip -r ../../artifacts/qiwo-rime-sync-${{ matrix.runtime }}.zip .)
+          else
+            tar -czf artifacts/qiwo-rime-sync-${{ matrix.runtime }}.tar.gz -C publish/${{ matrix.runtime }} .
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: qiwo-rime-sync-${{ matrix.runtime }}
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 30
