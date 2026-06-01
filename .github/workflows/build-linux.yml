@@ -1,0 +1,108 @@
+name: Build Linux
+
+on:
+  push:
+    branches:
+      - dev/linux-frontend
+  pull_request:
+    branches:
+      - dev/linux-frontend
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: true
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            pkg-config \
+            libibus-1.0-dev \
+            libnotify-dev \
+            librime-dev \
+            git
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Build qiwo-sync-core (linux-x64)
+        run: |
+          dotnet publish qiwo-sync-core/src/qiwo-rime-sync/qiwo-rime-sync.csproj \
+            --configuration Release \
+            --runtime linux-x64 \
+            --self-contained true \
+            -p:PublishSingleFile=true \
+            -p:PublishTrimmed=true \
+            -o qiwo-sync-core/publish/linux-x64
+
+      - name: Initialize librime submodule
+        working-directory: ibus-rime
+        run: |
+          git submodule update --init --recursive
+
+      - name: Build ibus-rime
+        working-directory: ibus-rime
+        run: |
+          mkdir -p build && cd build
+          cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr ..
+          make -j$(nproc)
+
+      - name: Package with install script
+        working-directory: ibus-rime
+        run: |
+          VERSION=$(git describe --always)
+          PKG_DIR=/tmp/qiwo-ibus-${VERSION}
+
+          mkdir -p ${PKG_DIR}/bin
+          mkdir -p ${PKG_DIR}/icons
+
+          cp build/ibus-engine-rime ${PKG_DIR}/bin/
+          cp rime.xml.in ${PKG_DIR}/rime.xml
+          cp -r icons/* ${PKG_DIR}/icons/ 2>/dev/null || true
+          cp ../../qiwo-sync-core/publish/linux-x64/qiwo-rime-sync ${PKG_DIR}/bin/
+
+          cat > ${PKG_DIR}/install.sh << 'INSTALL_EOF'
+          #!/usr/bin/env bash
+          set -e
+
+          PREFIX="${PREFIX:-/usr}"
+          echo "==> 安装 Qiwo Input Method for Linux ..."
+
+          sudo mkdir -p "${PREFIX}/libexec/ibus-rime"
+          sudo mkdir -p "${PREFIX}/share/ibus/component"
+          sudo mkdir -p "${PREFIX}/share/ibus-rime/icons"
+          sudo mkdir -p "${PREFIX}/bin"
+
+          SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+          sudo cp "${SCRIPT_DIR}/bin/ibus-engine-rime" "${PREFIX}/libexec/ibus-rime/"
+          sudo cp "${SCRIPT_DIR}/rime.xml" "${PREFIX}/share/ibus/component/"
+          sudo cp -r "${SCRIPT_DIR}/icons/"* "${PREFIX}/share/ibus-rime/icons/" 2>/dev/null || true
+          sudo cp "${SCRIPT_DIR}/bin/qiwo-rime-sync" "${PREFIX}/bin/"
+
+          echo "==> 重启 IBus ..."
+          ibus-daemon -drx 2>/dev/null || true
+
+          echo "==> 安装完成！请在 IBus 设置中添加「齐我输入法」"
+          INSTALL_EOF
+          chmod +x ${PKG_DIR}/install.sh
+
+          cd /tmp
+          tar -czf qiwo-ibus-${VERSION}.tar.gz qiwo-ibus-${VERSION}/
+
+      - name: Upload tarball artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: Qiwo-Linux-${{ github.sha }}
+          path: /tmp/qiwo-ibus-*.tar.gz
+          retention-days: 90

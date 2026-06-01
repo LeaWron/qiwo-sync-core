@@ -1,0 +1,355 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: 'Platform to release'
+        required: false
+        type: choice
+        options:
+          - all
+          - macos
+          - windows
+          - linux
+          - android
+
+jobs:
+  # ── macOS Release ──────────────────────────────────────────────
+  release-macos:
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all' || github.event.inputs.platform == 'macos' }}
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: qiwo-squirrel
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: true
+          fetch-depth: 0
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Build qiwo-sync-core (universal)
+        run: |
+          dotnet publish ../qiwo-sync-core/src/qiwo-rime-sync/qiwo-rime-sync.csproj \
+            --configuration Release --runtime osx-arm64 \
+            --self-contained true -p:PublishSingleFile=true -p:PublishTrimmed=true \
+            -o ../qiwo-sync-core/publish/osx-arm64
+          dotnet publish ../qiwo-sync-core/src/qiwo-rime-sync/qiwo-rime-sync.csproj \
+            --configuration Release --runtime osx-x64 \
+            --self-contained true -p:PublishSingleFile=true -p:PublishTrimmed=true \
+            -o ../qiwo-sync-core/publish/osx-x64
+          mkdir -p qiwo-sync
+          lipo -create \
+            ../qiwo-sync-core/publish/osx-arm64/qiwo-rime-sync \
+            ../qiwo-sync-core/publish/osx-x64/qiwo-rime-sync \
+            -output qiwo-sync/qiwo-rime-sync
+
+      - name: Install SwiftLint
+        run: brew install swiftlint
+
+      - name: Lint
+        run: swiftlint
+
+      - name: Build archive
+        env:
+          ARCHS: 'arm64 x86_64'
+        run: |
+          export SQUIRREL_BUNDLED_RECIPES="${SQUIRREL_BUNDLED_RECIPES:-lotem/rime-octagram-data lotem/rime-octagram-data@hant}"
+          ./action-build.sh archive
+
+      - name: Upload pkg
+        uses: actions/upload-artifact@v6
+        with:
+          name: Qiwo-macOS-release
+          path: qiwo-squirrel/package/*.pkg
+          retention-days: 30
+
+  # ── Windows Release ────────────────────────────────────────────
+  release-windows:
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all' || github.event.inputs.platform == 'windows' }}
+    runs-on: windows-2022
+    env:
+      boost_version: 1.84.0
+      BOOST_ROOT: ${{ github.workspace }}\deps\boost_1_84_0
+      SDKVER: 10.0.19041.0
+    defaults:
+      run:
+        working-directory: weasel
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: true
+          fetch-depth: 0
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Build qiwo-sync-core (win-x64)
+        run: |
+          dotnet publish ../qiwo-sync-core/src/qiwo-rime-sync/qiwo-rime-sync.csproj `
+            --configuration Release --runtime win-x64 `
+            --self-contained true -p:PublishSingleFile=true -p:PublishTrimmed=true `
+            -o ../qiwo-sync-core/publish/win-x64
+
+      - name: Configure build environment
+        shell: bash
+        run: |
+          cp env.vs2022.bat env.bat
+          echo "git_ref_name=$(git describe --always)" >> $GITHUB_ENV
+
+      - name: Cache Boost
+        id: cache-boost
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.BOOST_ROOT }}
+          key: ${{ runner.os }}-boost-${{ env.boost_version }}
+
+      - name: Install Boost
+        if: steps.cache-boost.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          ./install_boost.bat
+          ./build.bat boost arm64
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          sdk: ${{ env.SDKVER }}
+
+      - name: Cache bundled WinSparkle
+        id: cache-winsparkle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ github.workspace }}\winsparkle\x64\Release\WinSparkle.dll
+            ${{ github.workspace }}\winsparkle\x64\Release\WinSparkle.lib
+            ${{ github.workspace }}\winsparkle\Release\WinSparkle.dll
+            ${{ github.workspace }}\winsparkle\Release\WinSparkle.lib
+          key: ${{ runner.os }}-winsparkle-v0.9.2-bundled
+
+      - name: Build bundled WinSparkle
+        if: steps.cache-winsparkle.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (Test-Path winsparkle) { Remove-Item -Recurse -Force winsparkle }
+          git clone https://github.com/vslavik/winsparkle.git -b v0.9.2 --depth 1
+          cd winsparkle
+          git submodule update --init --recursive
+          copy ..\bundled_winsparkle.patch .
+          git apply bundled_winsparkle.patch
+          nuget restore
+          msbuild -m -t:Build -p:Configuration=Release -p:Platform=x64 WinSparkle.sln
+          msbuild -m -t:Build -p:Configuration=Release -p:Platform=Win32 WinSparkle.sln
+
+      - name: Install WinSparkle files
+        shell: pwsh
+        run: |
+          copy .\winsparkle\x64\Release\WinSparkle.dll .\output\
+          copy .\winsparkle\x64\Release\WinSparkle.lib .\lib64\
+          copy .\winsparkle\Release\WinSparkle.dll .\output\Win32\
+          copy .\winsparkle\Release\WinSparkle.lib .\lib\
+
+      - name: Get Rime files
+        shell: pwsh
+        run: .\get-rime.ps1 -use dev
+
+      - name: Build data
+        shell: pwsh
+        run: .\build.bat data
+
+      - name: Build Weasel
+        shell: pwsh
+        run: .\build.bat arm64 installer
+
+      - name: Copy qiwo-sync-core to output
+        shell: pwsh
+        run: copy ..\qiwo-sync-core\publish\win-x64\qiwo-rime-sync.exe .\output\
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v6
+        with:
+          name: Qiwo-Windows-release
+          path: weasel/output/archives/weasel*.exe
+          retention-days: 30
+
+  # ── Linux Release ──────────────────────────────────────────────
+  release-linux:
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all' || github.event.inputs.platform == 'linux' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: true
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential cmake pkg-config \
+            libibus-1.0-dev libnotify-dev librime-dev \
+            git
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Build qiwo-sync-core (linux-x64)
+        run: |
+          dotnet publish qiwo-sync-core/src/qiwo-rime-sync/qiwo-rime-sync.csproj \
+            --configuration Release --runtime linux-x64 \
+            --self-contained true -p:PublishSingleFile=true -p:PublishTrimmed=true \
+            -o qiwo-sync-core/publish/linux-x64
+
+      - name: Initialize librime submodule
+        working-directory: ibus-rime
+        run: git submodule update --init --recursive
+
+      - name: Build ibus-rime
+        working-directory: ibus-rime
+        run: |
+          mkdir -p build && cd build
+          cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr ..
+          make -j$(nproc)
+
+      - name: Package with install script
+        working-directory: ibus-rime
+        run: |
+          VERSION=$(git describe --always)
+          PKG_DIR=/tmp/qiwo-ibus-${VERSION}
+
+          mkdir -p ${PKG_DIR}/bin
+          mkdir -p ${PKG_DIR}/icons
+
+          cp build/ibus-engine-rime ${PKG_DIR}/bin/
+          cp rime.xml.in ${PKG_DIR}/rime.xml
+          cp -r icons/* ${PKG_DIR}/icons/ 2>/dev/null || true
+          cp ../../qiwo-sync-core/publish/linux-x64/qiwo-rime-sync ${PKG_DIR}/bin/
+
+          cat > ${PKG_DIR}/install.sh << 'INSTALL_EOF'
+          #!/usr/bin/env bash
+          set -e
+
+          PREFIX="${PREFIX:-/usr}"
+          echo "==> 安装 Qiwo Input Method for Linux ..."
+
+          sudo mkdir -p "${PREFIX}/libexec/ibus-rime"
+          sudo mkdir -p "${PREFIX}/share/ibus/component"
+          sudo mkdir -p "${PREFIX}/share/ibus-rime/icons"
+          sudo mkdir -p "${PREFIX}/bin"
+
+          SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+          sudo cp "${SCRIPT_DIR}/bin/ibus-engine-rime" "${PREFIX}/libexec/ibus-rime/"
+          sudo cp "${SCRIPT_DIR}/rime.xml" "${PREFIX}/share/ibus/component/"
+          sudo cp -r "${SCRIPT_DIR}/icons/"* "${PREFIX}/share/ibus-rime/icons/" 2>/dev/null || true
+          sudo cp "${SCRIPT_DIR}/bin/qiwo-rime-sync" "${PREFIX}/bin/"
+
+          echo "==> 重启 IBus ..."
+          ibus-daemon -drx 2>/dev/null || true
+
+          echo "==> 安装完成！请在 IBus 设置中添加「齐我输入法」"
+          INSTALL_EOF
+          chmod +x ${PKG_DIR}/install.sh
+
+          cd /tmp
+          tar -czf qiwo-ibus-${VERSION}.tar.gz qiwo-ibus-${VERSION}/
+
+      - name: Upload tarball
+        uses: actions/upload-artifact@v6
+        with:
+          name: Qiwo-Linux-release
+          path: /tmp/qiwo-ibus-*.tar.gz
+          retention-days: 30
+
+  # ── Android Release ────────────────────────────────────────────
+  release-android:
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all' || github.event.inputs.platform == 'android' }}
+    runs-on: ubuntu-24.04
+    env:
+      BUILD_ABI: armeabi-v7a,arm64-v8a,x86,x86_64
+    defaults:
+      run:
+        working-directory: trime
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: gradle
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Install CMake
+        run: sdkmanager --install "cmake;3.31.6"
+
+      - name: Calculate JNI cache hash
+        id: cache-hash
+        run: ./gradlew :app:calculateNativeCacheHash
+
+      - name: Fetch JNI cache
+        uses: actions/cache@v5
+        id: jni-cache
+        with:
+          path: trime/app/prebuilt
+          key: ${{ runner.os }}-trime-jni-release-${{ steps.cache-hash.outputs.native-cache-hash }}
+
+      - name: Fetch submodules
+        if: ${{ !steps.jni-cache.outputs.cache-hit }}
+        run: git submodule update --init --recursive
+
+      - name: Build release APK
+        run: make release
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v6
+        with:
+          name: Qiwo-Android-release
+          path: trime/app/build/outputs/apk/release/
+          retention-days: 30
+
+  # ── Create GitHub Release ──────────────────────────────────────
+  create-release:
+    needs:
+      - release-macos
+      - release-windows
+      - release-linux
+      - release-android
+    runs-on: ubuntu-latest
+    if: ${{ startsWith(github.ref, 'refs/tags/') }}
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v5
+        with:
+          path: artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: true
+          files: |
+            artifacts/**/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

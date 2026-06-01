@@ -1,0 +1,75 @@
+name: Build macOS
+
+on:
+  push:
+    branches:
+      - dev/mac-frontend
+  pull_request:
+    branches:
+      - dev/mac-frontend
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: qiwo-squirrel
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: true
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Build qiwo-sync-core (arm64)
+        run: |
+          dotnet publish ../qiwo-sync-core/src/qiwo-rime-sync/qiwo-rime-sync.csproj \
+            --configuration Release \
+            --runtime osx-arm64 \
+            --self-contained true \
+            -p:PublishSingleFile=true \
+            -p:PublishTrimmed=true \
+            -o ../qiwo-sync-core/publish/osx-arm64
+
+      - name: Build qiwo-sync-core (x64)
+        run: |
+          dotnet publish ../qiwo-sync-core/src/qiwo-rime-sync/qiwo-rime-sync.csproj \
+            --configuration Release \
+            --runtime osx-x64 \
+            --self-contained true \
+            -p:PublishSingleFile=true \
+            -p:PublishTrimmed=true \
+            -o ../qiwo-sync-core/publish/osx-x64
+
+      - name: Create universal qiwo-sync binary
+        run: |
+          mkdir -p qiwo-sync
+          lipo -create \
+            ../qiwo-sync-core/publish/osx-arm64/qiwo-rime-sync \
+            ../qiwo-sync-core/publish/osx-x64/qiwo-rime-sync \
+            -output qiwo-sync/qiwo-rime-sync
+
+      - name: Install SwiftLint
+        run: brew install swiftlint
+
+      - name: Lint
+        run: swiftlint
+
+      - name: Configure build environment
+        run: |
+          echo "git_ref_name=$(git describe --always)" >> $GITHUB_ENV
+
+      - name: Build package
+        run: ./action-build.sh package
+
+      - name: Upload pkg artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: Qiwo-macOS-${{ env.git_ref_name }}
+          path: qiwo-squirrel/package/*.pkg
+          retention-days: 90

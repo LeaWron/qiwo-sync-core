@@ -1,0 +1,79 @@
+name: Build Android
+
+on:
+  push:
+    branches:
+      - dev/android-frontend
+  pull_request:
+    branches:
+      - dev/android-frontend
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    env:
+      BUILD_ABI: armeabi-v7a,arm64-v8a,x86,x86_64
+    defaults:
+      run:
+        working-directory: trime
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Get branch name
+        shell: bash
+        run: |
+          echo "CI_BRANCH=${GITHUB_REF#refs/*/}" >> $GITHUB_ENV
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: gradle
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Install CMake
+        run: |
+          sdkmanager --install "cmake;3.31.6"
+
+      - name: Calculate JNI cache hash
+        id: cache-hash
+        run: |
+          ./gradlew :app:calculateNativeCacheHash
+
+      - name: Fetch JNI cache
+        uses: actions/cache@v5
+        id: jni-cache
+        with:
+          path: trime/app/prebuilt
+          key: ${{ runner.os }}-trime-jni-debug-${{ steps.cache-hash.outputs.native-cache-hash }}
+
+      - name: Fetch submodules
+        if: ${{ !steps.jni-cache.outputs.cache-hit }}
+        run: |
+          git submodule update --init --recursive
+
+      - name: Check code style
+        run: make style-lint
+
+      - name: Build debug APK
+        run: make debug
+
+      - name: Add JNI cache
+        if: ${{ !steps.jni-cache.outputs.cache-hit }}
+        shell: bash
+        run: cp -R app/build/intermediates/merged_native_libs/debug/mergeDebugNativeLibs/out/lib app/prebuilt
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: Qiwo-Android-${{ env.CI_BRANCH }}
+          path: trime/app/build/outputs/apk/debug/
+          retention-days: 90
