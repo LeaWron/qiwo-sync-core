@@ -1,18 +1,20 @@
-[submodule "weasel"]
-	path = weasel
-	url = https://github.com/rime/weasel
-[submodule "ibus-rime"]
-	path = ibus-rime
-	url = https://github.com/rime/ibus-rime
-[submodule "squirrel"]
-	path = squirrel
-	url = https://github.com/rime/squirrel
-[submodule "trime"]
-	path = trime
-	url = https://github.com/osfans/trime
-[submodule "librime"]
-	path = librime
-	url = https://github.com/rime/librime
-[submodule "rime-frost"]
-	path = rime-frost
-	url = https://github.com/gaboolic/rime-frost
+[submodule "qiwo-trime"]
+	path = qiwo-trime
+	url = https://github.com/LeaWron/qiwo-trime.git
+	branch = main
+[submodule "qiwo-ibusr"]
+	path = qiwo-ibusr
+	url = https://github.com/LeaWron/qiwo-ibusr.git
+	branch = main
+[submodule "qiwo-squirrel"]
+	path = qiwo-squirrel
+	url = https://github.com/LeaWron/qiwo-squirrel.git
+	branch = main
+[submodule "qiwo-weasel"]
+	path = qiwo-weasel
+	url = https://github.com/LeaWron/qiwo-weasel.git
+	branch = main
+[submodule "qiwo-sync-core"]
+	path = qiwo-sync-core
+	url = https://github.com/LeaWron/qiwo-sync-core.git
+	branch = main
