@@ -1,7 +1,3 @@
-[submodule "qiwo-trime"]
-	path = qiwo-trime
-	url = https://github.com/LeaWron/qiwo-trime.git
-	branch = main
 [submodule "qiwo-ibusr"]
 	path = qiwo-ibusr
 	url = https://github.com/LeaWron/qiwo-ibusr.git
@@ -18,3 +14,7 @@
 	path = qiwo-sync-core
 	url = https://github.com/LeaWron/qiwo-sync-core.git
 	branch = main
+[submodule "qiwo-yuyan"]
+	path = qiwo-yuyan
+	url = https://github.com/LeaWron/qiwo-yuyan.git
+	branch = dev/qiwo-brand

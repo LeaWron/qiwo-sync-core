@@ -9,7 +9,7 @@
 | Windows | `qiwo-weasel` | `LeaWron/qiwo-weasel` | weasel |
 | Linux | `qiwo-ibusr` | `LeaWron/qiwo-ibusr` | ibus-rime |
 | macOS | `qiwo-squirrel` | `LeaWron/qiwo-squirrel` | squirrel |
-| Android | `qiwo-trime` | `LeaWron/qiwo-trime` | trime |
+| Android | `qiwo-yuyan` | `LeaWron/qiwo-yuyan` | YuyanIme |
 | 同步核心 | `qiwo-sync-core` | `LeaWron/qiwo-sync-core` | .NET |
 
 ## 使用方式
