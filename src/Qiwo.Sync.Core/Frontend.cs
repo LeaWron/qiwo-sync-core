@@ -5,5 +5,6 @@ public enum Frontend
     Weasel,
     Squirrel,
     IbusRime,
-    Trime
+    Trime,
+    YuyanIme
 }
