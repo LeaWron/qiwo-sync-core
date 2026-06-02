@@ -83,7 +83,7 @@ jobs:
       SDKVER: 10.0.19041.0
     defaults:
       run:
-        working-directory: weasel
+        working-directory: qiwo-weasel
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -181,7 +181,7 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: Qiwo-Windows-release
-          path: weasel/output/archives/weasel*.exe
+          path: qiwo-weasel/output/archives/weasel*.exe
           retention-days: 30
 
   # ── Linux Release ──────────────────────────────────────────────
@@ -215,18 +215,18 @@ jobs:
             -o qiwo-sync-core/publish/linux-x64
 
       - name: Initialize librime submodule
-        working-directory: ibus-rime
+        working-directory: qiwo-ibusr
         run: git submodule update --init --recursive
 
       - name: Build ibus-rime
-        working-directory: ibus-rime
+        working-directory: qiwo-ibusr
         run: |
           mkdir -p build && cd build
           cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr ..
           make -j$(nproc)
 
       - name: Package with install script
-        working-directory: ibus-rime
+        working-directory: qiwo-ibusr
         run: |
           VERSION=$(git describe --always)
           PKG_DIR=/tmp/qiwo-ibus-${VERSION}
@@ -235,9 +235,9 @@ jobs:
           mkdir -p ${PKG_DIR}/icons
 
           cp build/ibus-engine-rime ${PKG_DIR}/bin/
-          cp rime.xml.in ${PKG_DIR}/rime.xml
+          cp build/qiwo.xml ${PKG_DIR}/
           cp -r icons/* ${PKG_DIR}/icons/ 2>/dev/null || true
-          cp ../../qiwo-sync-core/publish/linux-x64/qiwo-rime-sync ${PKG_DIR}/bin/
+          cp ../qiwo-sync-core/publish/linux-x64/qiwo-rime-sync ${PKG_DIR}/bin/
 
           cat > ${PKG_DIR}/install.sh << 'INSTALL_EOF'
           #!/usr/bin/env bash
@@ -246,16 +246,16 @@ jobs:
           PREFIX="${PREFIX:-/usr}"
           echo "==> 安装 Qiwo Input Method for Linux ..."
 
-          sudo mkdir -p "${PREFIX}/libexec/ibus-rime"
+          sudo mkdir -p "${PREFIX}/libexec/qiwo"
           sudo mkdir -p "${PREFIX}/share/ibus/component"
-          sudo mkdir -p "${PREFIX}/share/ibus-rime/icons"
+          sudo mkdir -p "${PREFIX}/share/qiwo/icons"
           sudo mkdir -p "${PREFIX}/bin"
 
           SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-          sudo cp "${SCRIPT_DIR}/bin/ibus-engine-rime" "${PREFIX}/libexec/ibus-rime/"
-          sudo cp "${SCRIPT_DIR}/rime.xml" "${PREFIX}/share/ibus/component/"
-          sudo cp -r "${SCRIPT_DIR}/icons/"* "${PREFIX}/share/ibus-rime/icons/" 2>/dev/null || true
+          sudo cp "${SCRIPT_DIR}/bin/ibus-engine-rime" "${PREFIX}/libexec/qiwo/"
+          sudo cp "${SCRIPT_DIR}/qiwo.xml" "${PREFIX}/share/ibus/component/"
+          sudo cp -r "${SCRIPT_DIR}/icons/"* "${PREFIX}/share/qiwo/icons/" 2>/dev/null || true
           sudo cp "${SCRIPT_DIR}/bin/qiwo-rime-sync" "${PREFIX}/bin/"
 
           echo "==> 重启 IBus ..."
