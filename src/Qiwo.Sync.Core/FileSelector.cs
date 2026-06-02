@@ -18,7 +18,8 @@ public sealed class FileSelector
     private static readonly string[] IncludedDirectories =
     {
         "opencc/",
-        "lua/"
+        "lua/",
+        "sync/"
     };
 
     private static readonly string[] ExcludedDirectories =

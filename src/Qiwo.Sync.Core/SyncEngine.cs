@@ -32,6 +32,7 @@ public sealed class SyncEngine
             SyncMode.Push => await PushAsync(request, webDav, cancellationToken),
             SyncMode.Pull => await PullAsync(request, webDav, cancellationToken),
             SyncMode.Sync => await SyncAsync(request, webDav, cancellationToken),
+            SyncMode.SyncUserDict => await SyncUserDictAsync(request, webDav, cancellationToken),
             _ => throw new NotSupportedException($"Unsupported mode: {request.Mode}")
         };
     }
@@ -206,6 +207,138 @@ public sealed class SyncEngine
         await WriteManifestsAsync(request, webDav, finalManifest, cancellationToken);
 
         messages.Add($"Uploaded {uploaded}, downloaded {downloaded}, conflicts {conflicts}.");
+        return CreateSummary(
+            request,
+            uploaded: uploaded,
+            downloaded: downloaded,
+            conflicts: conflicts,
+            skipped: skipped,
+            messages: messages);
+    }
+
+    /// <summary>
+    /// 仅同步用户词库文本导出（sync/ 目录）。
+    /// 平台代码应在调用此方法前先触发 Rime 的 sync_user_data() 导出词库。
+    /// </summary>
+    private async Task<SyncSummary> SyncUserDictAsync(
+        SyncRequest request,
+        WebDavClient webDav,
+        CancellationToken cancellationToken)
+    {
+        var local = new LocalFileStore(request.RimeUserDir, _selector);
+        var manifestStore = new ManifestStore(request.RimeUserDir);
+        var previousManifest = await manifestStore.ReadLocalAsync(cancellationToken);
+        var remoteManifest = await ReadRemoteManifestAsync(webDav, cancellationToken);
+        var localFiles = local.Scan();
+
+        // 过滤：仅保留 sync/ 目录下的文件（用户词库文本导出）
+        var localDictFiles = new Dictionary<string, SyncFileEntry>(StringComparer.OrdinalIgnoreCase);
+        foreach (var kv in localFiles)
+        {
+            if (kv.Key.StartsWith("sync/", StringComparison.OrdinalIgnoreCase))
+                localDictFiles[kv.Key] = kv.Value;
+        }
+
+        var remoteDictFiles = new Dictionary<string, SyncFileEntry>(StringComparer.OrdinalIgnoreCase);
+        foreach (var kv in remoteManifest.Files)
+        {
+            if (kv.Key.StartsWith("sync/", StringComparison.OrdinalIgnoreCase))
+                remoteDictFiles[kv.Key] = kv.Value;
+        }
+
+        var uploaded = 0;
+        var downloaded = 0;
+        var skipped = 0;
+        var conflicts = 0;
+        var messages = new List<string>();
+
+        var allPaths = localDictFiles.Keys
+            .Concat(remoteDictFiles.Keys)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var path in allPaths)
+        {
+            if (!_selector.ShouldSync(path))
+            {
+                skipped++;
+                continue;
+            }
+
+            localDictFiles.TryGetValue(path, out var localEntry);
+            remoteDictFiles.TryGetValue(path, out var remoteEntry);
+            previousManifest.Files.TryGetValue(path, out var previousEntry);
+
+            // 文件相同 → 跳过
+            if (localEntry is not null && remoteEntry is not null
+                && string.Equals(localEntry.Sha256, remoteEntry.Sha256, StringComparison.OrdinalIgnoreCase))
+            {
+                skipped++;
+                continue;
+            }
+
+            var localChanged = localEntry is not null
+                && (previousEntry is null
+                    || !string.Equals(localEntry.Sha256, previousEntry.Sha256, StringComparison.OrdinalIgnoreCase));
+            var remoteChanged = remoteEntry is not null
+                && (previousEntry is null
+                    || !string.Equals(remoteEntry.Sha256, previousEntry.Sha256, StringComparison.OrdinalIgnoreCase));
+
+            if (localEntry is not null && remoteEntry is null)
+            {
+                await UploadAsync(request, webDav, local, localEntry, cancellationToken);
+                uploaded++;
+            }
+            else if (localEntry is null && remoteEntry is not null)
+            {
+                await DownloadAsync(request, webDav, local, remoteEntry, backup: false, cancellationToken);
+                downloaded++;
+            }
+            else if (localEntry is not null && remoteEntry is not null)
+            {
+                if (localChanged && !remoteChanged)
+                {
+                    await UploadAsync(request, webDav, local, localEntry, cancellationToken);
+                    uploaded++;
+                }
+                else if (!localChanged && remoteChanged)
+                {
+                    await DownloadAsync(request, webDav, local, remoteEntry, backup: false, cancellationToken);
+                    downloaded++;
+                }
+                else if (localChanged && remoteChanged)
+                {
+                    await DownloadAsync(request, webDav, local, remoteEntry, backup: true, cancellationToken);
+                    downloaded++;
+                    conflicts++;
+                    messages.Add($"Conflict backed up, remote kept: {path}");
+                }
+                else
+                {
+                    var localWins = localEntry.LastWriteUtc >= remoteEntry.LastWriteUtc;
+                    if (localWins)
+                    {
+                        await UploadAsync(request, webDav, local, localEntry, cancellationToken);
+                        uploaded++;
+                    }
+                    else
+                    {
+                        await DownloadAsync(request, webDav, local, remoteEntry, backup: false, cancellationToken);
+                        downloaded++;
+                    }
+                }
+            }
+            else
+            {
+                skipped++;
+            }
+        }
+
+        var finalFiles = request.DryRun ? localFiles : local.Scan();
+        var finalManifest = CreateManifest(request, finalFiles);
+        await WriteManifestsAsync(request, webDav, finalManifest, cancellationToken);
+
+        messages.Add($"Dict sync — uploaded {uploaded}, downloaded {downloaded}, conflicts {conflicts}.");
         return CreateSummary(
             request,
             uploaded: uploaded,

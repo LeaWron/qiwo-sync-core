@@ -112,6 +112,7 @@ internal static class ProgramMain
             "push" => SyncMode.Push,
             "pull" => SyncMode.Pull,
             "init-frost" => SyncMode.InitFrost,
+            "sync-user-dict" => SyncMode.SyncUserDict,
             _ => throw new ArgumentException($"Unknown mode: {value}")
         };
     }
@@ -124,6 +125,7 @@ internal static class ProgramMain
             "squirrel" => Frontend.Squirrel,
             "ibus-rime" or "ibus" => Frontend.IbusRime,
             "trime" => Frontend.Trime,
+            "yuyanime" or "yuyan" => Frontend.YuyanIme,
             _ => throw new ArgumentException($"Unknown frontend: {value}")
         };
     }

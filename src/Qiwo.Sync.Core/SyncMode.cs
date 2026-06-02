@@ -5,5 +5,6 @@ public enum SyncMode
     Sync,
     Push,
     Pull,
-    InitFrost
+    InitFrost,
+    SyncUserDict
 }
