@@ -111,7 +111,7 @@ jobs:
 
       - name: Cache Boost
         id: cache-boost
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ${{ env.BOOST_ROOT }}
           key: ${{ runner.os }}-boost-${{ env.boost_version }}
@@ -129,7 +129,7 @@ jobs:
 
       - name: Cache bundled WinSparkle
         id: cache-winsparkle
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ${{ github.workspace }}\winsparkle\x64\Release\WinSparkle.dll
@@ -181,7 +181,7 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: Qiwo-Windows-release
-          path: qiwo-weasel/output/archives/weasel*.exe
+          path: qiwo-weasel/output/archives/*weasel*.exe
           retention-days: 30
 
   # ── Linux Release ──────────────────────────────────────────────
