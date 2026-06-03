@@ -1,6 +1,7 @@
 pub mod file_selector;
 pub mod frost_init;
 pub mod installation;
+pub mod jni_bridge;
 pub mod sync_engine;
 pub mod types;
 pub mod webdav_client;
