@@ -112,7 +112,10 @@ fn is_frost_resource(relative_path: &str, selector: &FileSelector) -> bool {
         return true;
     }
 
-    let lower = relative_path.replace('\\', "/").trim_start_matches('/').to_lowercase();
+    let lower = relative_path
+        .replace('\\', "/")
+        .trim_start_matches('/')
+        .to_lowercase();
 
     lower.ends_with(".yaml")
         || lower == "installation.yaml"

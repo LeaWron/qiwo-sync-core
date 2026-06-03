@@ -1,4 +1,4 @@
-/// 与 C# FileSelector 逻辑完全对齐。
+/// Selects Rime files that are safe to share through WebDAV.
 pub struct FileSelector;
 
 impl FileSelector {
@@ -8,8 +8,7 @@ impl FileSelector {
     const INCLUDED_DIRECTORIES: &'static [&'static str] = &["opencc/", "lua/", "sync/"];
     const EXCLUDED_DIRECTORIES: &'static [&'static str] = &[".git/", ".qiwo-sync/", "build/"];
     const EXCLUDED_EXTENSIONS: &'static [&'static str] = &[".bin"];
-    const EXCLUDED_SUFFIXES: &'static [&'static str] =
-        &[".table.bin", ".reverse.bin", ".userdb"];
+    const EXCLUDED_SUFFIXES: &'static [&'static str] = &[".table.bin", ".reverse.bin", ".userdb"];
 
     pub fn should_sync(&self, relative_path: &str) -> bool {
         let path = normalize_path(relative_path);
@@ -45,10 +44,7 @@ impl FileSelector {
         }
 
         // 扩展名匹配
-        if Self::INCLUDED_EXTENSIONS
-            .iter()
-            .any(|e| lower.ends_with(e))
-        {
+        if Self::INCLUDED_EXTENSIONS.iter().any(|e| lower.ends_with(e)) {
             return true;
         }
 
