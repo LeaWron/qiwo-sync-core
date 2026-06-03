@@ -1,0 +1,3 @@
+[workspace]
+members = ["qiwo-sync", "qiwo-rime-sync"]
+resolver = "2"
