@@ -1,0 +1,15 @@
+[package]
+name = "qiwo-rime-sync"
+version = "0.1.0"
+edition = "2024"
+description = "Qiwo Rime sync CLI — WebDAV-based Rime configuration and user dictionary sync"
+
+[dependencies]
+qiwo-sync = { path = "../qiwo-sync" }
+clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+serde_json = "1"
+
+[[bin]]
+name = "qiwo-rime-sync"
+path = "src/main.rs"
