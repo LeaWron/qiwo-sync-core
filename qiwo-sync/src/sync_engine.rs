@@ -7,6 +7,7 @@ use sha2::{Digest, Sha256};
 use tokio::fs;
 
 use crate::file_selector::FileSelector;
+use crate::installation::InstallationHelper;
 use crate::types::{SyncFileEntry, SyncManifest, SyncMode, SyncRequest, SyncSummary};
 use crate::webdav_client::WebDavClient;
 
@@ -38,6 +39,8 @@ impl SyncEngine {
 
         if !request.dry_run {
             fs::create_dir_all(&request.rime_user_dir).await?;
+            InstallationHelper::ensure(&request.rime_user_dir, &request.device_id).await?;
+            InstallationHelper::ensure_sync_export_dir(&request.rime_user_dir, &request.device_id)?;
         }
 
         let webdav = WebDavClient::new(
@@ -312,8 +315,7 @@ impl SyncEngine {
             label, uploaded, downloaded, conflicts
         ));
 
-        let mut summary =
-            SyncSummary::new(request.mode, request.frontend, &request.device_id);
+        let mut summary = SyncSummary::new(request.mode, request.frontend, &request.device_id);
         summary.uploaded = uploaded;
         summary.downloaded = downloaded;
         summary.conflicts_backed_up = conflicts;
@@ -443,10 +445,7 @@ async fn write_manifests(
     Ok(())
 }
 
-fn create_manifest(
-    request: &SyncRequest,
-    files: &HashMap<String, SyncFileEntry>,
-) -> SyncManifest {
+fn create_manifest(request: &SyncRequest, files: &HashMap<String, SyncFileEntry>) -> SyncManifest {
     SyncManifest {
         version: 1,
         device_id: request.device_id.clone(),

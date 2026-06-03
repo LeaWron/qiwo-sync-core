@@ -1,8 +1,8 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 use reqwest::StatusCode;
+use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 
@@ -15,10 +15,7 @@ impl WebDavClient {
     pub fn new(base_url: &str, username: Option<&str>, password: Option<&str>) -> Result<Self> {
         let mut headers = HeaderMap::new();
         if let (Some(u), Some(p)) = (username, password) {
-            let auth = format!(
-                "Basic {}",
-                base64_encode(format!("{}:{}", u, p).as_bytes())
-            );
+            let auth = format!("Basic {}", base64_encode(format!("{}:{}", u, p).as_bytes()));
             headers.insert(AUTHORIZATION, HeaderValue::from_str(&auth)?);
         }
 
@@ -117,10 +114,7 @@ impl WebDavClient {
 
     async fn ensure_collection(&self, relative_path: &str) -> Result<()> {
         let normalized = normalize_path(relative_path);
-        let segments: Vec<&str> = normalized
-            .split('/')
-            .filter(|s| !s.is_empty())
-            .collect();
+        let segments: Vec<&str> = normalized.split('/').filter(|s| !s.is_empty()).collect();
 
         let mut current = String::new();
         for seg in &segments {
@@ -154,12 +148,15 @@ impl WebDavClient {
         let status_code = resp.status();
         match status_code {
             StatusCode::CREATED | StatusCode::OK => Ok(()),
-            StatusCode::METHOD_NOT_ALLOWED | StatusCode::CONFLICT => {
-                Ok(())
-            }
+            StatusCode::METHOD_NOT_ALLOWED | StatusCode::CONFLICT => Ok(()),
             _ => {
                 let body = resp.text().await.unwrap_or_default();
-                anyhow::bail!("MKCOL {} failed: HTTP {} {}", url, status_code.as_u16(), body)
+                anyhow::bail!(
+                    "MKCOL {} failed: HTTP {} {}",
+                    url,
+                    status_code.as_u16(),
+                    body
+                )
             }
         }
     }

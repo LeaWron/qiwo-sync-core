@@ -1,6 +1,6 @@
+use jni::JNIEnv;
 use jni::objects::{JClass, JString};
 use jni::sys::jstring;
-use jni::JNIEnv;
 
 use crate::sync_engine::SyncEngine;
 use crate::types::SyncRequest;

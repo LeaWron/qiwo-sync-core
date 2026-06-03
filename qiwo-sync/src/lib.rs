@@ -24,10 +24,7 @@ pub unsafe extern "C" fn qiwo_sync(json_request: *const c_char) -> *mut c_char {
     let request_str = match c_str.to_str() {
         Ok(s) => s,
         Err(e) => {
-            return to_c_string(&format!(
-                r#"{{"error":"Invalid UTF-8: {}"}}"#,
-                e
-            ));
+            return to_c_string(&format!(r#"{{"error":"Invalid UTF-8: {}"}}"#, e));
         }
     };
 
@@ -42,18 +39,14 @@ pub unsafe extern "C" fn qiwo_sync(json_request: *const c_char) -> *mut c_char {
     let rt = match tokio::runtime::Runtime::new() {
         Ok(r) => r,
         Err(e) => {
-            return to_c_string(&format!(
-                r#"{{"error":"Runtime: {}"}}"#,
-                e
-            ));
+            return to_c_string(&format!(r#"{{"error":"Runtime: {}"}}"#, e));
         }
     };
 
     match rt.block_on(engine.execute(request)) {
         Ok(summary) => {
-            let json = serde_json::to_string(&summary).unwrap_or_else(|e| {
-                format!(r#"{{"error":"Serialize: {}"}}"#, e)
-            });
+            let json = serde_json::to_string(&summary)
+                .unwrap_or_else(|e| format!(r#"{{"error":"Serialize: {}"}}"#, e));
             to_c_string(&json)
         }
         Err(e) => to_c_string(&format!(r#"{{"error":"{}"}}"#, e)),
