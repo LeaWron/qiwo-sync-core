@@ -791,6 +791,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "jni",
+ "libc",
  "reqwest",
  "serde",
  "serde_json",

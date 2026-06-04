@@ -1,6 +1,6 @@
 use jni::JNIEnv;
 use jni::objects::{JClass, JString};
-use jni::sys::jstring;
+use jni::sys::{jboolean, jstring};
 
 use crate::sync_engine::SyncEngine;
 use crate::types::SyncRequest;
@@ -48,4 +48,53 @@ pub extern "system" fn Java_com_qiwo_sync_QiwoSync_nativeSync(
     };
 
     env.new_string(json).unwrap().into_raw()
+}
+
+/// JNI entry point: trigger YuyanIme's bundled librime user data sync.
+///
+/// Java signature:
+/// `com.qiwo.sync.QiwoSync.nativeSyncUserData() -> boolean`
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_qiwo_sync_QiwoSync_nativeSyncUserData(
+    _env: JNIEnv,
+    _class: JClass,
+) -> jboolean {
+    if sync_yuyan_rime_user_data() { 1 } else { 0 }
+}
+
+#[cfg(target_os = "android")]
+fn sync_yuyan_rime_user_data() -> bool {
+    use std::ffi::CString;
+
+    type RimeSyncUserData = unsafe extern "C" fn() -> i32;
+
+    let library = CString::new("libyuyanime.so").expect("static library name");
+    let symbols = [
+        CString::new("_Z16RimeSyncUserDatav").expect("static symbol name"),
+        CString::new("RimeSyncUserData").expect("static symbol name"),
+    ];
+
+    unsafe {
+        let handle = libc::dlopen(library.as_ptr(), libc::RTLD_NOW);
+        if handle.is_null() {
+            return false;
+        }
+
+        for symbol in &symbols {
+            let ptr = libc::dlsym(handle, symbol.as_ptr());
+            if ptr.is_null() {
+                continue;
+            }
+
+            let sync_user_data: RimeSyncUserData = std::mem::transmute(ptr);
+            return sync_user_data() != 0;
+        }
+    }
+
+    false
+}
+
+#[cfg(not(target_os = "android"))]
+fn sync_yuyan_rime_user_data() -> bool {
+    false
 }
