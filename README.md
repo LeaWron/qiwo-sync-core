@@ -67,7 +67,7 @@ by setting:
 
 ```yaml
 installation_id: "<device-id>"
-sync_dir: "sync"
+sync_dir: "<absolute-rime-user-dir>/sync"
 ```
 
 If the device id changes, existing files from the previous `sync/<old-id>/`
