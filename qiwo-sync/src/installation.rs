@@ -18,6 +18,7 @@ impl InstallationHelper {
 
         if file.exists() {
             let content = fs::read_to_string(&file).await?;
+            let sync_dir = sync_dir_for_yaml(rime_user_dir);
             let mut has_sync_dir = false;
             let mut has_installation_id = false;
             let mut old_installation_id = None;
@@ -31,7 +32,7 @@ impl InstallationHelper {
                     lines.push(format!("installation_id: \"{}\"", safe_id));
                 } else if trimmed.starts_with("sync_dir:") {
                     has_sync_dir = true;
-                    lines.push(format!("sync_dir: \"{}\"", Self::SYNC_DIR));
+                    lines.push(format!("sync_dir: \"{}\"", sync_dir));
                 } else {
                     lines.push(line.to_string());
                 }
@@ -42,7 +43,7 @@ impl InstallationHelper {
             }
 
             if !has_sync_dir {
-                lines.push(format!("sync_dir: \"{}\"", Self::SYNC_DIR));
+                lines.push(format!("sync_dir: \"{}\"", sync_dir));
             }
 
             let updated = format!("{}\n", lines.join("\n"));
@@ -59,7 +60,7 @@ impl InstallationHelper {
         let yaml = format!(
             "distribution: \"Qiwo\"\ndistribution_version: \"1.0\"\ninstallation_id: \"{}\"\nsync_dir: \"{}\"\n",
             safe_id,
-            Self::SYNC_DIR
+            sync_dir_for_yaml(rime_user_dir)
         );
 
         if let Some(parent) = file.parent() {
@@ -118,6 +119,13 @@ fn make_safe_id(device_id: &str) -> String {
     } else {
         safe
     }
+}
+
+fn sync_dir_for_yaml(rime_user_dir: &Path) -> String {
+    rime_user_dir
+        .join(InstallationHelper::SYNC_DIR)
+        .to_string_lossy()
+        .replace('\\', "/")
 }
 
 fn parse_yaml_string_value(line: &str) -> Option<String> {
