@@ -21,6 +21,21 @@ const SCHEMA_CUSTOM_CONTENT: &str = concat!(
     "    name: auto_commit_spacing\n",
     "    states: [ 关闭中英数字自动空格, 开启中英数字自动空格 ]\n",
 );
+const DEFAULT_PATCH_ENTRIES: &[(&str, &str)] = &[
+    ("switcher/hotkeys/@next: F4", "  switcher/hotkeys/@next: F4"),
+    (
+        "switcher/save_options/@next: auto_commit_spacing",
+        "  switcher/save_options/@next: auto_commit_spacing",
+    ),
+];
+const SCHEMA_PATCH_ENTRIES: &[(&str, &str)] = &[(
+    "auto_commit_spacing",
+    concat!(
+        "  switches/@next:\n",
+        "    name: auto_commit_spacing\n",
+        "    states: [ 关闭中英数字自动空格, 开启中英数字自动空格 ]",
+    ),
+)];
 
 pub struct FrostInitializer;
 
@@ -148,6 +163,7 @@ async fn ensure_default_custom_yaml(rime_user_dir: &Path, dry_run: bool) -> Resu
         rime_user_dir,
         DEFAULT_CUSTOM_YAML,
         DEFAULT_CUSTOM_CONTENT,
+        DEFAULT_PATCH_ENTRIES,
         dry_run,
     )
     .await
@@ -176,8 +192,14 @@ async fn ensure_schema_custom_yamls(
         }
 
         let custom_file = format!("{schema_id}.custom.yaml");
-        if ensure_custom_yaml_file(rime_user_dir, &custom_file, SCHEMA_CUSTOM_CONTENT, dry_run)
-            .await?
+        if ensure_custom_yaml_file(
+            rime_user_dir,
+            &custom_file,
+            SCHEMA_CUSTOM_CONTENT,
+            SCHEMA_PATCH_ENTRIES,
+            dry_run,
+        )
+        .await?
         {
             ensured += 1;
         }
@@ -190,15 +212,29 @@ async fn ensure_custom_yaml_file(
     rime_user_dir: &Path,
     file_name: &str,
     content: &str,
+    patch_entries: &[(&str, &str)],
     dry_run: bool,
 ) -> Result<bool> {
     let file = rime_user_dir.join(file_name);
 
     if file.exists() {
-        if let Ok(meta) = std::fs::metadata(&file) {
-            if meta.len() > 0 {
+        let existing = std::fs::read_to_string(&file)?;
+        if !existing.trim().is_empty() {
+            let missing_entries: Vec<&str> = patch_entries
+                .iter()
+                .filter_map(|(needle, entry)| (!existing.contains(needle)).then_some(*entry))
+                .collect();
+
+            if missing_entries.is_empty() {
                 return Ok(false);
             }
+
+            if dry_run {
+                return Ok(true);
+            }
+
+            fs::write(&file, append_yaml_patch_entries(&existing, &missing_entries)).await?;
+            return Ok(true);
         }
     }
 
@@ -212,6 +248,43 @@ async fn ensure_custom_yaml_file(
 
     fs::write(&file, content).await?;
     Ok(true)
+}
+
+fn append_yaml_patch_entries(content: &str, entries: &[&str]) -> String {
+    let mut lines: Vec<&str> = content.lines().collect();
+
+    let Some(patch_index) = lines.iter().position(|line| *line == "patch:") else {
+        let mut output = content.to_owned();
+        if !output.ends_with('\n') {
+            output.push('\n');
+        }
+        if !output.is_empty() {
+            output.push('\n');
+        }
+        output.push_str("patch:\n");
+        output.push_str(&entries.join("\n"));
+        output.push('\n');
+        return output;
+    };
+
+    let insertion_index = lines
+        .iter()
+        .enumerate()
+        .skip(patch_index + 1)
+        .find_map(|(index, line)| {
+            (!line.is_empty()
+                && !line.starts_with(' ')
+                && !line.starts_with('\t')
+                && !line.starts_with('#'))
+            .then_some(index)
+        })
+        .unwrap_or(lines.len());
+
+    for (offset, entry) in entries.iter().enumerate() {
+        lines.insert(insertion_index + offset, entry);
+    }
+
+    format!("{}\n", lines.join("\n"))
 }
 
 #[cfg(test)]
@@ -277,6 +350,55 @@ mod tests {
                 .exists()
         );
         assert!(!user_dir.join("luna_pinyin.custom.yaml").exists());
+
+        let _ = std_fs::remove_dir_all(frost_dir);
+        let _ = std_fs::remove_dir_all(user_dir);
+    }
+
+    #[test]
+    fn init_frost_merges_qiwo_patches_into_existing_custom_files() {
+        let rt = Runtime::new().unwrap();
+        let frost_dir = temp_dir("frost-existing");
+        let user_dir = temp_dir("user-existing");
+        std_fs::create_dir_all(&frost_dir).unwrap();
+        std_fs::create_dir_all(&user_dir).unwrap();
+        std_fs::write(frost_dir.join("rime_frost.schema.yaml"), "schema\n").unwrap();
+        std_fs::write(
+            user_dir.join("default.custom.yaml"),
+            "patch:\n  schema_list:\n    - schema: luna_pinyin\n",
+        )
+        .unwrap();
+        std_fs::write(
+            user_dir.join("rime_frost.custom.yaml"),
+            "patch:\n  translator/dictionary: rime_frost\n",
+        )
+        .unwrap();
+
+        let request = SyncRequest {
+            frontend: Frontend::IbusRime,
+            rime_user_dir: user_dir.clone(),
+            remote_url: None,
+            username: None,
+            password: None,
+            device_id: "test".into(),
+            mode: SyncMode::InitFrost,
+            frost_dir: Some(frost_dir.clone()),
+            dry_run: false,
+        };
+
+        rt.block_on(FrostInitializer::initialize(&request)).unwrap();
+
+        let default_custom = std_fs::read_to_string(user_dir.join("default.custom.yaml")).unwrap();
+        assert!(default_custom.contains("schema: luna_pinyin"));
+        assert!(!default_custom.contains("schema: rime_frost"));
+        assert!(default_custom.contains("switcher/hotkeys/@next: F4"));
+        assert!(default_custom.contains("switcher/save_options/@next: auto_commit_spacing"));
+
+        let schema_custom =
+            std_fs::read_to_string(user_dir.join("rime_frost.custom.yaml")).unwrap();
+        assert!(schema_custom.contains("translator/dictionary: rime_frost"));
+        assert!(schema_custom.contains("switches/@next"));
+        assert!(schema_custom.contains("auto_commit_spacing"));
 
         let _ = std_fs::remove_dir_all(frost_dir);
         let _ = std_fs::remove_dir_all(user_dir);
