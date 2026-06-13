@@ -23,7 +23,15 @@ pub enum Frontend {
     Squirrel,
     IbusRime,
     Trime,
-    YuyanIme,
+    #[serde(
+        rename = "qiwoime",
+        alias = "qiwo",
+        alias = "qiwo-ime",
+        alias = "yuyanime",
+        alias = "yuyan",
+        alias = "yuyan-ime"
+    )]
+    QiwoIme,
 }
 
 impl Frontend {
@@ -33,7 +41,7 @@ impl Frontend {
             Frontend::Squirrel => "Squirrel",
             Frontend::IbusRime => "IbusRime",
             Frontend::Trime => "Trime",
-            Frontend::YuyanIme => "YuyanIme",
+            Frontend::QiwoIme => "QiwoIme",
         }
     }
 }
@@ -123,5 +131,42 @@ impl SyncManifest {
             updated_at_utc: Utc::now(),
             files: HashMap::new(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn frontend_deserializes_qiwo_android_identity() {
+        assert_eq!(
+            serde_json::from_str::<Frontend>("\"qiwoime\"").unwrap(),
+            Frontend::QiwoIme
+        );
+        assert_eq!(
+            serde_json::from_str::<Frontend>("\"qiwo\"").unwrap(),
+            Frontend::QiwoIme
+        );
+        assert_eq!(
+            serde_json::from_str::<Frontend>("\"qiwo-ime\"").unwrap(),
+            Frontend::QiwoIme
+        );
+    }
+
+    #[test]
+    fn frontend_deserializes_legacy_yuyan_aliases_without_serializing_them() {
+        assert_eq!(
+            serde_json::from_str::<Frontend>("\"yuyanime\"").unwrap(),
+            Frontend::QiwoIme
+        );
+        assert_eq!(
+            serde_json::from_str::<Frontend>("\"yuyan\"").unwrap(),
+            Frontend::QiwoIme
+        );
+        assert_eq!(
+            serde_json::to_string(&Frontend::QiwoIme).unwrap(),
+            "\"qiwoime\""
+        );
     }
 }

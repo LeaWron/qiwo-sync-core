@@ -78,8 +78,27 @@ fn parse_frontend(value: &str) -> Result<Frontend, String> {
         "squirrel" => Ok(Frontend::Squirrel),
         "ibus-rime" | "ibus" => Ok(Frontend::IbusRime),
         "trime" => Ok(Frontend::Trime),
-        "yuyanime" | "yuyan" => Ok(Frontend::YuyanIme),
+        "qiwoime" | "qiwo" | "qiwo-ime" => Ok(Frontend::QiwoIme),
+        "yuyanime" | "yuyan" | "yuyan-ime" => Ok(Frontend::QiwoIme),
         _ => Err(format!("Unknown frontend: {}", value)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_frontend_accepts_qiwo_android_identity() {
+        assert_eq!(parse_frontend("qiwoime").unwrap(), Frontend::QiwoIme);
+        assert_eq!(parse_frontend("qiwo").unwrap(), Frontend::QiwoIme);
+        assert_eq!(parse_frontend("qiwo-ime").unwrap(), Frontend::QiwoIme);
+    }
+
+    #[test]
+    fn parse_frontend_keeps_legacy_yuyan_aliases_as_inputs_only() {
+        assert_eq!(parse_frontend("yuyanime").unwrap(), Frontend::QiwoIme);
+        assert_eq!(parse_frontend("yuyan").unwrap(), Frontend::QiwoIme);
     }
 }
 
