@@ -24,7 +24,8 @@ pub enum Frontend {
     IbusRime,
     Trime,
     #[serde(
-        rename = "qiwoime",
+        rename = "qiwo-yuyan",
+        alias = "qiwoime",
         alias = "qiwo",
         alias = "qiwo-ime",
         alias = "yuyanime",
@@ -41,7 +42,7 @@ impl Frontend {
             Frontend::Squirrel => "Squirrel",
             Frontend::IbusRime => "IbusRime",
             Frontend::Trime => "Trime",
-            Frontend::QiwoIme => "QiwoIme",
+            Frontend::QiwoIme => "qiwo-yuyan",
         }
     }
 }
@@ -141,6 +142,10 @@ mod tests {
     #[test]
     fn frontend_deserializes_qiwo_android_identity() {
         assert_eq!(
+            serde_json::from_str::<Frontend>("\"qiwo-yuyan\"").unwrap(),
+            Frontend::QiwoIme
+        );
+        assert_eq!(
             serde_json::from_str::<Frontend>("\"qiwoime\"").unwrap(),
             Frontend::QiwoIme
         );
@@ -166,7 +171,7 @@ mod tests {
         );
         assert_eq!(
             serde_json::to_string(&Frontend::QiwoIme).unwrap(),
-            "\"qiwoime\""
+            "\"qiwo-yuyan\""
         );
     }
 }

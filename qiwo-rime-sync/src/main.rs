@@ -78,7 +78,7 @@ fn parse_frontend(value: &str) -> Result<Frontend, String> {
         "squirrel" => Ok(Frontend::Squirrel),
         "ibus-rime" | "ibus" => Ok(Frontend::IbusRime),
         "trime" => Ok(Frontend::Trime),
-        "qiwoime" | "qiwo" | "qiwo-ime" => Ok(Frontend::QiwoIme),
+        "qiwo-yuyan" | "qiwoime" | "qiwo" | "qiwo-ime" => Ok(Frontend::QiwoIme),
         "yuyanime" | "yuyan" | "yuyan-ime" => Ok(Frontend::QiwoIme),
         _ => Err(format!("Unknown frontend: {}", value)),
     }
@@ -90,6 +90,7 @@ mod tests {
 
     #[test]
     fn parse_frontend_accepts_qiwo_android_identity() {
+        assert_eq!(parse_frontend("qiwo-yuyan").unwrap(), Frontend::QiwoIme);
         assert_eq!(parse_frontend("qiwoime").unwrap(), Frontend::QiwoIme);
         assert_eq!(parse_frontend("qiwo").unwrap(), Frontend::QiwoIme);
         assert_eq!(parse_frontend("qiwo-ime").unwrap(), Frontend::QiwoIme);
