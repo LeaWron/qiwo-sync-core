@@ -5,6 +5,9 @@ use jni::sys::{jboolean, jstring};
 use crate::sync_engine::SyncEngine;
 use crate::types::SyncRequest;
 
+#[cfg(any(target_os = "android", test))]
+const YUYAN_RIME_SYNC_SYMBOLS: [&str; 2] = ["RimeSyncUserData", "_Z16RimeSyncUserDatav"];
+
 /// JNI entry point: execute sync with JSON request, return JSON result.
 ///
 /// Java signature:
@@ -69,18 +72,14 @@ fn sync_yuyan_rime_user_data() -> bool {
     type RimeSyncUserData = unsafe extern "C" fn() -> i32;
 
     let library = CString::new("libyuyanime.so").expect("static library name");
-    let symbols = [
-        CString::new("_Z16RimeSyncUserDatav").expect("static symbol name"),
-        CString::new("RimeSyncUserData").expect("static symbol name"),
-    ];
-
     unsafe {
         let handle = libc::dlopen(library.as_ptr(), libc::RTLD_NOW);
         if handle.is_null() {
             return false;
         }
 
-        for symbol in &symbols {
+        for symbol_name in YUYAN_RIME_SYNC_SYMBOLS {
+            let symbol = CString::new(symbol_name).expect("static symbol name");
             let ptr = libc::dlsym(handle, symbol.as_ptr());
             if ptr.is_null() {
                 continue;
@@ -97,4 +96,15 @@ fn sync_yuyan_rime_user_data() -> bool {
 #[cfg(not(target_os = "android"))]
 fn sync_yuyan_rime_user_data() -> bool {
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::YUYAN_RIME_SYNC_SYMBOLS;
+
+    #[test]
+    fn prefers_yuyan_sync_wrapper_before_raw_librime_symbol() {
+        assert_eq!(YUYAN_RIME_SYNC_SYMBOLS[0], "RimeSyncUserData");
+        assert_eq!(YUYAN_RIME_SYNC_SYMBOLS[1], "_Z16RimeSyncUserDatav");
+    }
 }
