@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # rust-toolchain.toml pins the version; components come from it too.
+      - name: Show toolchain
+        run: rustc --version && cargo --version && cargo clippy --version
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test (workspace)
+        run: cargo test --workspace
+
+      # Cargo unifies features across a workspace build, which can hide a
+      # library that secretly depends on a feature only the CLI enables. The
+      # library is what Android/Tauri would link, so it has to stand alone.
+      - name: Test (library alone)
+        run: cargo test -p qiwo-sync
+
+  # The sync core is not cross-compiled for Android -- that frontend reimplements
+  # sync in Kotlin. A cross-check would need the NDK anyway, because rustls pulls
+  # in ring's C code.

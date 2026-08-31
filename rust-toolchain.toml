@@ -1,0 +1,6 @@
+# Pinned so CI, the Windows installer build (build.bat calls cargo directly) and
+# any future Android cross-build all agree on clippy/rustfmt behaviour. The
+# crates need at least 1.88 anyway: edition 2024 plus let-chains.
+[toolchain]
+channel = "1.95.0"
+components = ["rustfmt", "clippy"]

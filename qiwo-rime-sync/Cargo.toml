@@ -2,6 +2,7 @@
 name = "qiwo-rime-sync"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.88"   # edition 2024 + let-chains
 description = "Qiwo Rime sync CLI — WebDAV-based Rime configuration and user dictionary sync"
 
 [dependencies]

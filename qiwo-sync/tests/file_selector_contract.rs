@@ -13,6 +13,38 @@ use std::path::Path;
 
 use qiwo_sync::file_selector::FileSelector;
 
+/// SHA-256 of the case file with line endings normalised to LF.
+///
+/// The same constant is asserted by `FileSelectorContractTest` in qiwo-android.
+/// Editing the cases on one side only makes the *other* repository's build fail
+/// on its next run, which is the point: the two copies must move together.
+const CASES_SHA256: &str = "bbaaa8a30b0a1d1d9844b8c3b29003ddbef0708c58203f2cfe45eaa7cf757da6";
+
+fn sha256_lf(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let normalised: Vec<u8> = String::from_utf8_lossy(bytes).replace("\r\n", "\n").into();
+    format!("{:x}", Sha256::digest(&normalised))
+}
+
+#[test]
+fn shared_contract_file_is_unchanged_on_both_sides() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("file_selector_cases.jsonl");
+    let raw = std::fs::read(&path).unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
+
+    assert_eq!(
+        sha256_lf(&raw),
+        CASES_SHA256,
+        "the shared contract cases changed.\n\
+         Mirror {} to qiwo-android at \
+         app/src/test/resources/qiwo/sync/file_selector_cases.jsonl and update \
+         CASES_SHA256 in both repositories.",
+        path.display()
+    );
+}
+
 #[test]
 fn file_selector_matches_the_shared_contract() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
