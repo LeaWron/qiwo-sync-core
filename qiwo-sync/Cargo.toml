@@ -14,6 +14,9 @@ tokio = { version = "1", features = ["fs", "io-util", "rt", "sync"] }
 chrono = { version = "0.4", features = ["serde"] }
 anyhow = "1"
 walkdir = "2"
+# 流式上传（ReaderStream）与有界并发传输
+tokio-util = { version = "0.7", default-features = false, features = ["io"] }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 
 [lib]
 name = "qiwo_sync"

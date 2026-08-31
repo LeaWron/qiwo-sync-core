@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -22,9 +22,29 @@ struct Store {
     files: HashMap<String, Vec<u8>>,
 }
 
+/// Tracks how many PUTs are being served at the same moment, so a test can show
+/// that transfers really do overlap rather than just that they all completed.
+#[derive(Default)]
+struct PutGauge {
+    in_flight: AtomicUsize,
+    peak: AtomicUsize,
+}
+
+impl PutGauge {
+    fn enter(&self) {
+        let now = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+        self.peak.fetch_max(now, Ordering::SeqCst);
+    }
+
+    fn leave(&self) {
+        self.in_flight.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 struct DavStub {
     base_url: String,
     store: Arc<Mutex<Store>>,
+    gauge: Arc<PutGauge>,
     stop: Arc<AtomicBool>,
     handle: Option<thread::JoinHandle<()>>,
 }
@@ -35,17 +55,25 @@ impl DavStub {
         let addr = listener.local_addr().unwrap();
         let base_url = format!("http://{addr}/dav");
         let store = Arc::new(Mutex::new(Store::default()));
+        let gauge = Arc::new(PutGauge::default());
         let stop = Arc::new(AtomicBool::new(false));
 
         let worker_store = Arc::clone(&store);
+        let worker_gauge = Arc::clone(&gauge);
         let worker_stop = Arc::clone(&stop);
+        // One thread per connection: a single accept-and-serve loop would
+        // serialise the client and hide whether transfers overlap at all.
         let handle = thread::spawn(move || {
             for stream in listener.incoming() {
                 if worker_stop.load(Ordering::SeqCst) {
                     break;
                 }
                 match stream {
-                    Ok(stream) => handle_conn(stream, &worker_store),
+                    Ok(stream) => {
+                        let store = Arc::clone(&worker_store);
+                        let gauge = Arc::clone(&worker_gauge);
+                        thread::spawn(move || handle_conn(stream, &store, &gauge));
+                    }
                     Err(_) => break,
                 }
             }
@@ -54,9 +82,14 @@ impl DavStub {
         Self {
             base_url,
             store,
+            gauge,
             stop,
             handle: Some(handle),
         }
+    }
+
+    fn peak_concurrent_puts(&self) -> usize {
+        self.gauge.peak.load(Ordering::SeqCst)
     }
 
     fn put(&self, path: &str, body: &str) {
@@ -104,7 +137,7 @@ impl Drop for DavStub {
     }
 }
 
-fn handle_conn(mut stream: TcpStream, store: &Arc<Mutex<Store>>) {
+fn handle_conn(mut stream: TcpStream, store: &Arc<Mutex<Store>>, gauge: &PutGauge) {
     let mut reader = BufReader::new(stream.try_clone().unwrap());
 
     let mut request_line = String::new();
@@ -145,7 +178,12 @@ fn handle_conn(mut stream: TcpStream, store: &Arc<Mutex<Store>>) {
         "PROPFIND" => (207, Vec::new()),
         "MKCOL" => (201, Vec::new()),
         "PUT" => {
+            gauge.enter();
+            // A short hold makes overlap observable; without it a fast local
+            // handler could finish before the next request even arrives.
+            thread::sleep(std::time::Duration::from_millis(40));
             store.lock().unwrap().files.insert(key, body);
+            gauge.leave();
             (201, Vec::new())
         }
         "GET" => match store.lock().unwrap().files.get(&key) {
@@ -244,6 +282,68 @@ fn first_sync_uploads_local_files_and_publishes_a_manifest() {
     );
 
     let _ = std::fs::remove_dir_all(user_dir);
+}
+
+/// Transfers must actually overlap. They used to run one round trip at a time,
+/// which on a mobile link dominates the wall clock once `sync/` holds a snapshot
+/// set per device.
+#[test]
+fn transfers_run_concurrently_within_the_configured_bound() {
+    let dav = DavStub::start();
+    let user_dir = temp_dir("concurrent");
+    for i in 0..8 {
+        write(
+            &user_dir,
+            &format!("sync/test-device/dict-{i}.userdb.txt"),
+            &format!("snapshot {i}\n"),
+        );
+    }
+
+    let summary = run(SyncMode::Sync, &user_dir, &dav.base_url);
+    assert_eq!(summary.uploaded, 8, "{:?}", summary.messages);
+
+    let peak = dav.peak_concurrent_puts();
+    assert!(
+        peak > 1,
+        "transfers were serialised (peak in-flight PUT = {peak})"
+    );
+    assert!(
+        peak <= 4,
+        "concurrency bound exceeded (peak in-flight PUT = {peak}, limit 4)"
+    );
+
+    let _ = std::fs::remove_dir_all(user_dir);
+}
+
+/// A snapshot larger than any single buffer must round-trip intact — the upload
+/// streams from disk and the download streams into the staging file, so neither
+/// holds the whole thing in memory.
+#[test]
+fn a_multi_megabyte_file_round_trips_through_streaming() {
+    let dav = DavStub::start();
+    let user_dir = temp_dir("streaming");
+    // Not uniform, so a truncated or duplicated chunk would change the content.
+    let big: String = (0..200_000)
+        .map(|i| char::from(b'a' + (i % 26) as u8))
+        .collect();
+    write(&user_dir, "sync/test-device/big.userdb.txt", &big);
+
+    let summary = run(SyncMode::Sync, &user_dir, &dav.base_url);
+    assert_eq!(summary.uploaded, 1, "{:?}", summary.messages);
+    assert_eq!(
+        dav.get("sync/test-device/big.userdb.txt").unwrap(),
+        big,
+        "uploaded body must match byte for byte"
+    );
+
+    // Now pull it back into an empty directory.
+    let fresh = temp_dir("streaming-pull");
+    let pulled = run(SyncMode::Pull, &fresh, &dav.base_url);
+    assert_eq!(pulled.downloaded, 1, "{:?}", pulled.messages);
+    assert_eq!(read(&fresh, "sync/test-device/big.userdb.txt"), big);
+
+    let _ = std::fs::remove_dir_all(user_dir);
+    let _ = std::fs::remove_dir_all(fresh);
 }
 
 #[test]

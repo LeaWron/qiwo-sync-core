@@ -78,12 +78,31 @@ impl WebDavClient {
         self.ensure_collection("").await
     }
 
-    /// Upload a local file.
+    /// Upload a local file, streamed from disk.
+    ///
+    /// The body used to be `fs::read`, i.e. the whole file in memory before the
+    /// first byte went out. The synced set is dominated by `sync/<device>/`
+    /// dictionary snapshots — one set per device, growing with use — so that is
+    /// not a handful of small YAML files. Streaming keeps the footprint at one
+    /// buffer regardless of file size, which matters most on the Android side.
     pub async fn put_file(&self, relative_path: &str, local_path: &Path) -> Result<()> {
         self.ensure_parent_collection(relative_path).await?;
         let url = self.build_url(relative_path);
-        let data = fs::read(local_path).await?;
-        let resp = self.request(Method::PUT, &url).body(data).send().await?;
+
+        let file = fs::File::open(local_path)
+            .await
+            .with_context(|| format!("opening {}", local_path.display()))?;
+        // Content-Length lets servers reject an oversized body up front and stops
+        // reqwest falling back to chunked encoding, which some WebDAV hosts refuse.
+        let length = file.metadata().await?.len();
+
+        let body = reqwest::Body::wrap_stream(tokio_util::io::ReaderStream::new(file));
+        let resp = self
+            .request(Method::PUT, &url)
+            .header(reqwest::header::CONTENT_LENGTH, length)
+            .body(body)
+            .send()
+            .await?;
 
         ensure_success(resp, &url)
     }
@@ -133,10 +152,9 @@ impl WebDavClient {
             fs::create_dir_all(parent).await?;
         }
 
-        let data = resp.bytes().await?;
         let staging = staging_path(target);
 
-        match write_then_rename(&staging, target, &data).await {
+        match stream_then_rename(resp, &staging, target).await {
             Ok(()) => Ok(()),
             Err(e) => {
                 let _ = fs::remove_file(&staging).await;
@@ -197,11 +215,15 @@ impl WebDavClient {
 
     async fn ensure_collection_exists(&self, relative_path: &str) -> Result<()> {
         let normalized = crate::paths::normalize_relative(relative_path);
-        {
-            let known = self.known_collections.lock().await;
-            if known.contains(&normalized) {
-                return Ok(());
-            }
+
+        // The lock is deliberately held across the probe. Transfers run
+        // concurrently, so releasing it first would let every file under
+        // `sync/<device>/` race to PROPFIND and MKCOL the same collection —
+        // spending more round trips than the concurrency saves. Serialising
+        // collection creation costs nothing: it happens once per directory.
+        let mut known = self.known_collections.lock().await;
+        if known.contains(&normalized) {
+            return Ok(());
         }
 
         match self.probe_collection(&normalized).await? {
@@ -209,7 +231,7 @@ impl WebDavClient {
             CollectionProbe::Missing => self.mkcol(&normalized).await?,
         }
 
-        self.known_collections.lock().await.insert(normalized);
+        known.insert(normalized);
         Ok(())
     }
 
@@ -287,9 +309,19 @@ fn staging_path(target: &Path) -> std::path::PathBuf {
     }
 }
 
-async fn write_then_rename(staging: &Path, target: &Path, data: &[u8]) -> Result<()> {
+/// Streams a response body into `staging`, then renames it onto `target`.
+///
+/// Chunked rather than `Response::bytes()` so a multi-megabyte dictionary
+/// snapshot never has to exist in memory in one piece.
+async fn stream_then_rename(
+    mut resp: reqwest::Response,
+    staging: &Path,
+    target: &Path,
+) -> Result<()> {
     let mut file = fs::File::create(staging).await?;
-    file.write_all(data).await?;
+    while let Some(chunk) = resp.chunk().await? {
+        file.write_all(&chunk).await?;
+    }
     file.flush().await?;
     file.sync_all().await?;
     drop(file);

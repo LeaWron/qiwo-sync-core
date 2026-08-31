@@ -36,6 +36,96 @@ impl MergeScope {
     }
 }
 
+/// How many transfers may be in flight at once.
+///
+/// Kept modest: many WebDAV hosts (Nextcloud in particular) throttle or return
+/// 503 under heavier parallelism, and the win here is hiding round-trip latency,
+/// which four already does.
+const TRANSFER_CONCURRENCY: usize = 4;
+
+/// What a merge decided to do with one path. Produced by [`decide`], carried out
+/// by [`execute_plan`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TransferAction {
+    Upload(String),
+    Download(String),
+    /// Both sides changed: back the local copy up, then take the remote one.
+    ResolveConflict(String),
+}
+
+/// Decides what a single path needs. `None` means "nothing to do".
+///
+/// Pure, so the merge rules are testable without a server.
+fn decide(
+    path: &str,
+    selector: &FileSelector,
+    local: Option<&SyncFileEntry>,
+    remote: Option<&SyncFileEntry>,
+    previous: Option<&SyncFileEntry>,
+) -> Option<TransferAction> {
+    if !selector.should_sync(path) {
+        return None;
+    }
+
+    // Identical on both sides.
+    if let (Some(l), Some(r)) = (local, remote)
+        && l.sha256.eq_ignore_ascii_case(&r.sha256)
+    {
+        return None;
+    }
+
+    let local_changed =
+        local.is_some_and(|l| previous.is_none_or(|p| !l.sha256.eq_ignore_ascii_case(&p.sha256)));
+    let remote_changed =
+        remote.is_some_and(|r| previous.is_none_or(|p| !r.sha256.eq_ignore_ascii_case(&p.sha256)));
+
+    match (local, remote) {
+        (Some(_), None) => Some(TransferAction::Upload(path.to_string())),
+        (None, Some(_)) => Some(TransferAction::Download(path.to_string())),
+        (Some(l), Some(r)) => Some(match (local_changed, remote_changed) {
+            (true, false) => TransferAction::Upload(path.to_string()),
+            (false, true) => TransferAction::Download(path.to_string()),
+            (true, true) => TransferAction::ResolveConflict(path.to_string()),
+            // Neither side moved since the baseline but the content differs:
+            // fall back to the newer timestamp.
+            (false, false) => {
+                if l.last_write_utc >= r.last_write_utc {
+                    TransferAction::Upload(path.to_string())
+                } else {
+                    TransferAction::Download(path.to_string())
+                }
+            }
+        }),
+        (None, None) => None,
+    }
+}
+
+/// Runs a plan with bounded concurrency; the first failure aborts the rest.
+async fn execute_plan(
+    rime_user_dir: &Path,
+    webdav: &WebDavClient,
+    plan: &[TransferAction],
+) -> Result<()> {
+    use futures_util::stream::TryStreamExt;
+
+    futures_util::stream::iter(plan.iter().map(Ok::<_, anyhow::Error>))
+        .try_for_each_concurrent(TRANSFER_CONCURRENCY, |action| async move {
+            match action {
+                TransferAction::Upload(path) => {
+                    webdav.put_file(path, &rime_user_dir.join(path)).await
+                }
+                TransferAction::Download(path) => {
+                    webdav.download_file(path, &rime_user_dir.join(path)).await
+                }
+                TransferAction::ResolveConflict(path) => {
+                    backup_local_file(rime_user_dir, path).await?;
+                    webdav.download_file(path, &rime_user_dir.join(path)).await
+                }
+            }
+        })
+        .await
+}
+
 /// Returns `base` with its in-scope entries replaced by those from `updates`.
 fn merge_scoped(
     base: &HashMap<String, SyncFileEntry>,
@@ -117,12 +207,16 @@ impl SyncEngine {
         let mut uploaded = 0u32;
         let mut messages = Vec::new();
 
-        for path in local_files.keys().collect::<BTreeSet<_>>() {
-            if !request.dry_run {
-                let local_path = request.rime_user_dir.join(path);
-                webdav.put_file(path, &local_path).await?;
-            }
-            uploaded += 1;
+        let plan: Vec<TransferAction> = local_files
+            .keys()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .map(|path| TransferAction::Upload(path.clone()))
+            .collect();
+        uploaded += plan.len() as u32;
+
+        if !request.dry_run {
+            execute_plan(&request.rime_user_dir, webdav, &plan).await?;
         }
 
         // Push is "make the remote match this device", so both manifests become
@@ -145,17 +239,18 @@ impl SyncEngine {
         let mut skipped = 0u32;
         let mut messages = Vec::new();
 
+        let mut plan = Vec::new();
         for path in remote_manifest.files.keys().collect::<BTreeSet<_>>() {
-            if !self.selector.should_sync(path) {
+            if self.selector.should_sync(path) {
+                plan.push(TransferAction::Download(path.clone()));
+            } else {
                 skipped += 1;
-                continue;
             }
+        }
+        downloaded += plan.len() as u32;
 
-            if !request.dry_run {
-                let target = request.rime_user_dir.join(path);
-                webdav.download_file(path, &target).await?;
-            }
-            downloaded += 1;
+        if !request.dry_run {
+            execute_plan(&request.rime_user_dir, webdav, &plan).await?;
         }
 
         let local_files = if request.dry_run {
@@ -245,102 +340,37 @@ impl SyncEngine {
             .filter(|path| scope.contains(path))
             .collect();
 
+        // Deciding and transferring are separate passes: the decision is pure and
+        // ordered, the transfers then run concurrently. Keeping them together
+        // forced one round trip at a time, which on a mobile link costs more than
+        // the transfers themselves once `sync/` holds a snapshot set per device.
+        let mut plan = Vec::new();
         for path in &all_paths {
-            if !self.selector.should_sync(path) {
-                skipped += 1;
-                continue;
-            }
-
-            let local_entry = local_files.get(*path);
-            let remote_entry = remote_manifest.files.get(*path);
-            let previous_entry = previous_manifest.files.get(*path);
-
-            // Same hash on both sides → skip
-            if let (Some(l), Some(r)) = (local_entry, remote_entry)
-                && l.sha256.eq_ignore_ascii_case(&r.sha256)
-            {
-                skipped += 1;
-                continue;
-            }
-
-            let local_changed = local_entry.is_some_and(|l| {
-                previous_entry.is_none_or(|p| !l.sha256.eq_ignore_ascii_case(&p.sha256))
-            });
-            let remote_changed = remote_entry.is_some_and(|r| {
-                previous_entry.is_none_or(|p| !r.sha256.eq_ignore_ascii_case(&p.sha256))
-            });
-
-            match (local_entry, remote_entry) {
-                // Local only → upload
-                (Some(l), None) => {
-                    if !request.dry_run {
-                        let lp = request.rime_user_dir.join(&l.relative_path);
-                        webdav.put_file(&l.relative_path, &lp).await?;
-                    }
-                    uploaded += 1;
-                }
-                // Remote only → download
-                (None, Some(r)) => {
-                    if !request.dry_run {
-                        let target = request.rime_user_dir.join(&r.relative_path);
-                        webdav.download_file(&r.relative_path, &target).await?;
-                    }
-                    downloaded += 1;
-                }
-                (Some(l), Some(r)) => {
-                    match (local_changed, remote_changed) {
-                        // Local changed only → upload
-                        (true, false) => {
-                            if !request.dry_run {
-                                let lp = request.rime_user_dir.join(&l.relative_path);
-                                webdav.put_file(&l.relative_path, &lp).await?;
-                            }
-                            uploaded += 1;
-                        }
-                        // Remote changed only → download
-                        (false, true) => {
-                            if !request.dry_run {
-                                let target = request.rime_user_dir.join(&r.relative_path);
-                                webdav.download_file(&r.relative_path, &target).await?;
-                            }
-                            downloaded += 1;
-                        }
-                        // Both changed → conflict: backup local, remote wins
-                        (true, true) => {
-                            if !request.dry_run {
-                                backup_local_file(&request.rime_user_dir, &l.relative_path).await?;
-                                let target = request.rime_user_dir.join(&r.relative_path);
-                                webdav.download_file(&r.relative_path, &target).await?;
-                            }
+            match decide(
+                path,
+                &self.selector,
+                local_files.get(*path),
+                remote_manifest.files.get(*path),
+                previous_manifest.files.get(*path),
+            ) {
+                Some(action) => {
+                    match action {
+                        TransferAction::Upload(_) => uploaded += 1,
+                        TransferAction::Download(_) => downloaded += 1,
+                        TransferAction::ResolveConflict(ref p) => {
                             downloaded += 1;
                             conflicts += 1;
-                            messages.push(format!(
-                                "Conflict backed up, remote kept: {}",
-                                l.relative_path
-                            ));
-                        }
-                        // Neither changed → timestamp tiebreaker
-                        (false, false) => {
-                            if l.last_write_utc >= r.last_write_utc {
-                                if !request.dry_run {
-                                    let lp = request.rime_user_dir.join(&l.relative_path);
-                                    webdav.put_file(&l.relative_path, &lp).await?;
-                                }
-                                uploaded += 1;
-                            } else {
-                                if !request.dry_run {
-                                    let target = request.rime_user_dir.join(&r.relative_path);
-                                    webdav.download_file(&r.relative_path, &target).await?;
-                                }
-                                downloaded += 1;
-                            }
+                            messages.push(format!("Conflict backed up, remote kept: {p}"));
                         }
                     }
+                    plan.push(action);
                 }
-                (None, None) => {
-                    skipped += 1;
-                }
+                None => skipped += 1,
             }
+        }
+
+        if !request.dry_run {
+            execute_plan(&request.rime_user_dir, webdav, &plan).await?;
         }
 
         // Both manifests keep every entry this run did not look at. Rewriting
@@ -609,6 +639,84 @@ mod tests {
 
     fn manifest_of(entries: &[(&str, &str)]) -> HashMap<String, SyncFileEntry> {
         entries.iter().map(|(p, s)| entry(p, s)).collect()
+    }
+
+    fn dated(path: &str, sha: &str, secs: i64) -> SyncFileEntry {
+        SyncFileEntry {
+            relative_path: path.to_string(),
+            size: 1,
+            sha256: sha.to_string(),
+            last_write_utc: chrono::DateTime::from_timestamp(secs, 0).unwrap(),
+            e_tag: None,
+        }
+    }
+
+    /// The merge rules, exercised directly now that deciding is separate from
+    /// transferring.
+    #[test]
+    fn decide_covers_every_branch_of_the_three_way_merge() {
+        let sel = FileSelector;
+        let p = "default.custom.yaml";
+        let local = dated(p, "local", 100);
+        let remote = dated(p, "remote", 200);
+        let base = dated(p, "base", 50);
+
+        let up = Some(TransferAction::Upload(p.to_string()));
+        let down = Some(TransferAction::Download(p.to_string()));
+
+        // Not a synced path at all.
+        assert_eq!(
+            decide("rime_frost.dict.yaml", &sel, Some(&local), None, None),
+            None
+        );
+        // Nothing anywhere.
+        assert_eq!(decide(p, &sel, None, None, None), None);
+        // Same hash on both sides.
+        assert_eq!(decide(p, &sel, Some(&local), Some(&local), None), None);
+        // One side only.
+        assert_eq!(decide(p, &sel, Some(&local), None, None), up);
+        assert_eq!(decide(p, &sel, None, Some(&remote), None), down);
+        // Only local moved since the baseline.
+        assert_eq!(decide(p, &sel, Some(&local), Some(&base), Some(&base)), up);
+        // Only the remote moved.
+        assert_eq!(
+            decide(p, &sel, Some(&base), Some(&remote), Some(&base)),
+            down
+        );
+        // Both moved.
+        assert_eq!(
+            decide(p, &sel, Some(&local), Some(&remote), Some(&base)),
+            Some(TransferAction::ResolveConflict(p.to_string()))
+        );
+    }
+
+    /// No baseline but differing content: neither counts as "changed", so the
+    /// newer timestamp decides. This is the branch a first-ever sync hits.
+    #[test]
+    fn decide_falls_back_to_the_newer_timestamp_without_a_baseline() {
+        let sel = FileSelector;
+        let p = "default.custom.yaml";
+        let older = dated(p, "a", 100);
+        let newer = dated(p, "b", 200);
+
+        // Both look "changed" without a baseline, so this is the conflict branch.
+        assert_eq!(
+            decide(p, &sel, Some(&newer), Some(&older), None),
+            Some(TransferAction::ResolveConflict(p.to_string()))
+        );
+
+        // With a matching baseline on both sides, the tiebreaker applies.
+        let base_a = dated(p, "a", 10);
+        let base_b = dated(p, "b", 10);
+        assert_eq!(
+            decide(p, &sel, Some(&newer), Some(&older), Some(&base_b)),
+            Some(TransferAction::Download(p.to_string())),
+            "local matches no baseline hash, remote does -> local changed only"
+        );
+        assert_eq!(
+            decide(p, &sel, Some(&older), Some(&newer), Some(&base_a)),
+            Some(TransferAction::Download(p.to_string()))
+        );
     }
 
     #[test]

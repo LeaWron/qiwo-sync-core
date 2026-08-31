@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "deviceId": "windows-main",
+  "frontend": "Weasel",
+  "updatedAtUtc": "2026-08-31T12:34:56Z",
+  "files": {
+    "default.custom.yaml": {
+      "relativePath": "default.custom.yaml",
+      "size": 128,
+      "sha256": "3b1f2c4d5e6a7b8c9d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e",
+      "lastWriteUtc": "2026-08-30T01:02:03Z"
+    },
+    "sync/android-pixel-7/rime_frost.userdb.txt": {
+      "relativePath": "sync/android-pixel-7/rime_frost.userdb.txt",
+      "size": 4096,
+      "sha256": "0011223344556677889900aabbccddeeff00112233445566778899aabbccddee",
+      "lastWriteUtc": "2026-08-31T09:08:07Z"
+    }
+  }
+}
