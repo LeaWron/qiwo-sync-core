@@ -7,8 +7,10 @@ impl FileSelector {
         &[".custom.yaml", ".schema.yaml", ".dict.yaml"];
     const INCLUDED_DIRECTORIES: &'static [&'static str] = &["opencc/", "lua/", "sync/"];
     const EXCLUDED_DIRECTORIES: &'static [&'static str] = &[".git/", ".qiwo-sync/", "build/"];
-    const EXCLUDED_EXTENSIONS: &'static [&'static str] = &[".bin"];
-    const EXCLUDED_SUFFIXES: &'static [&'static str] = &[".table.bin", ".reverse.bin", ".userdb"];
+    // `.bin` already covers `.table.bin` and `.reverse.bin`; `.qiwo-part` is the
+    // staging suffix left behind by an interrupted download.
+    const EXCLUDED_EXTENSIONS: &'static [&'static str] = &[".bin", ".qiwo-part"];
+    const EXCLUDED_SUFFIXES: &'static [&'static str] = &[".userdb"];
 
     pub fn should_sync(&self, relative_path: &str) -> bool {
         let path = normalize_path(relative_path);
@@ -114,6 +116,13 @@ mod tests {
         let fs = FileSelector;
         assert!(!fs.should_sync("rime_frost.table.bin"));
         assert!(!fs.should_sync("rime_frost.reverse.bin"));
+    }
+
+    #[test]
+    fn test_exclude_interrupted_download_staging_files() {
+        let fs = FileSelector;
+        assert!(!fs.should_sync(".default.custom.yaml.qiwo-part"));
+        assert!(!fs.should_sync("sync/my-device/.rime_frost.userdb.txt.qiwo-part"));
     }
 
     #[test]

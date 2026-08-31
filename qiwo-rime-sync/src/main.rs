@@ -84,25 +84,6 @@ fn parse_frontend(value: &str) -> Result<Frontend, String> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_frontend_accepts_qiwo_android_identity() {
-        assert_eq!(parse_frontend("qiwo-yuyan").unwrap(), Frontend::QiwoIme);
-        assert_eq!(parse_frontend("qiwoime").unwrap(), Frontend::QiwoIme);
-        assert_eq!(parse_frontend("qiwo").unwrap(), Frontend::QiwoIme);
-        assert_eq!(parse_frontend("qiwo-ime").unwrap(), Frontend::QiwoIme);
-    }
-
-    #[test]
-    fn parse_frontend_keeps_legacy_yuyan_aliases_as_inputs_only() {
-        assert_eq!(parse_frontend("yuyanime").unwrap(), Frontend::QiwoIme);
-        assert_eq!(parse_frontend("yuyan").unwrap(), Frontend::QiwoIme);
-    }
-}
-
 fn hostname() -> String {
     std::env::var("COMPUTERNAME")
         .or_else(|_| std::env::var("HOSTNAME"))
@@ -120,7 +101,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Command::SyncUserDict(a) => (SyncMode::SyncUserDict, a, a.json),
         Command::InitFrost(a) => {
             let frontend = parse_frontend(&a.frontend)?;
-            let device_id = a.device_id.clone().unwrap_or_else(|| hostname());
+            let device_id = a.device_id.clone().unwrap_or_else(hostname);
 
             let request = SyncRequest {
                 frontend,
@@ -151,7 +132,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let frontend = parse_frontend(&args.frontend)?;
-    let device_id = args.device_id.clone().unwrap_or_else(|| hostname());
+    let device_id = args.device_id.clone().unwrap_or_else(hostname);
     let password = resolve_password(args.password.clone(), args.password_env.clone());
 
     let request = SyncRequest {
@@ -192,4 +173,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_frontend_accepts_qiwo_android_identity() {
+        assert_eq!(parse_frontend("qiwo-yuyan").unwrap(), Frontend::QiwoIme);
+        assert_eq!(parse_frontend("qiwoime").unwrap(), Frontend::QiwoIme);
+        assert_eq!(parse_frontend("qiwo").unwrap(), Frontend::QiwoIme);
+        assert_eq!(parse_frontend("qiwo-ime").unwrap(), Frontend::QiwoIme);
+    }
+
+    #[test]
+    fn parse_frontend_keeps_legacy_yuyan_aliases_as_inputs_only() {
+        assert_eq!(parse_frontend("yuyanime").unwrap(), Frontend::QiwoIme);
+        assert_eq!(parse_frontend("yuyan").unwrap(), Frontend::QiwoIme);
+    }
 }

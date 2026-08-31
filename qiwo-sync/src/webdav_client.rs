@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use reqwest::Method;
@@ -9,6 +10,9 @@ use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
+
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+const READ_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub struct WebDavClient {
     client: reqwest::Client,
@@ -34,9 +38,14 @@ impl WebDavClient {
         let base = base_url.trim_end_matches('/').to_string();
         reqwest::Url::parse(&base).context("Invalid remote URL")?;
 
+        // Without these a WebDAV host that accepts the connection and then stops
+        // talking wedges the whole sync forever. Values match the Android Kotlin
+        // client (WebDavClient.kt) so both frontends give up at the same point.
         let client = reqwest::Client::builder()
             .default_headers(headers)
             .user_agent("QiwoSync/1.0")
+            .connect_timeout(CONNECT_TIMEOUT)
+            .read_timeout(READ_TIMEOUT)
             .build()?;
 
         Ok(Self {
@@ -52,12 +61,12 @@ impl WebDavClient {
 
     /// Upload a local file.
     pub async fn put_file(&self, relative_path: &str, local_path: &Path) -> Result<()> {
-        if let Some(parent) = Path::new(relative_path).parent() {
-            if let Some(parent_str) = parent.to_str() {
-                if !parent_str.is_empty() && parent_str != "." {
-                    self.ensure_collection(parent_str).await?;
-                }
-            }
+        if let Some(parent) = Path::new(relative_path).parent()
+            && let Some(parent_str) = parent.to_str()
+            && !parent_str.is_empty()
+            && parent_str != "."
+        {
+            self.ensure_collection(parent_str).await?;
         }
 
         let url = self.build_url(relative_path);
@@ -94,6 +103,11 @@ impl WebDavClient {
     }
 
     /// Download a remote file to local path.
+    ///
+    /// The body lands in a sibling temp file that is renamed into place only
+    /// after it is fully written and flushed. A dropped connection mid-download
+    /// would otherwise leave a truncated `default.custom.yaml` — or a truncated
+    /// user dictionary snapshot — in the live Rime directory.
     pub async fn download_file(&self, relative_path: &str, target: &Path) -> Result<()> {
         let url = self.build_url(relative_path);
         let resp = self.client.get(&url).send().await?;
@@ -107,9 +121,15 @@ impl WebDavClient {
         }
 
         let data = resp.bytes().await?;
-        let mut file = fs::File::create(target).await?;
-        file.write_all(&data).await?;
-        Ok(())
+        let staging = staging_path(target);
+
+        match write_then_rename(&staging, target, &data).await {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                let _ = fs::remove_file(&staging).await;
+                Err(e).with_context(|| format!("writing {}", target.display()))
+            }
+        }
     }
 
     // ---- internal helpers ----
@@ -118,7 +138,7 @@ impl WebDavClient {
         let path = normalize_path(relative_path);
         let encoded = path
             .split('/')
-            .map(|seg| urlencoding(seg))
+            .map(urlencoding)
             .collect::<Vec<_>>()
             .join("/");
         format!("{}{}", self.base_url, encoded)
@@ -225,6 +245,34 @@ impl WebDavClient {
     }
 }
 
+/// Sibling staging path used by [`WebDavClient::download_file`].
+///
+/// Kept next to the target so the rename stays on one filesystem; the leading
+/// dot keeps it out of Rime's way if a crash leaves one behind, and the suffix
+/// is excluded by [`crate::file_selector::FileSelector`].
+fn staging_path(target: &Path) -> std::path::PathBuf {
+    let name = target
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "download".to_string());
+
+    match target.parent() {
+        Some(parent) => parent.join(format!(".{name}.qiwo-part")),
+        None => std::path::PathBuf::from(format!(".{name}.qiwo-part")),
+    }
+}
+
+async fn write_then_rename(staging: &Path, target: &Path, data: &[u8]) -> Result<()> {
+    let mut file = fs::File::create(staging).await?;
+    file.write_all(data).await?;
+    file.flush().await?;
+    file.sync_all().await?;
+    drop(file);
+
+    fs::rename(staging, target).await?;
+    Ok(())
+}
+
 fn ensure_success(resp: reqwest::Response, url: &str) -> Result<()> {
     let status = resp.status();
     if status.is_success() {
@@ -293,8 +341,10 @@ mod tests {
         path: String,
     }
 
+    // Current-thread on purpose: the library must not need `rt-multi-thread`, and
+    // a workspace build would otherwise hide that via feature unification.
     fn block_on<F: Future>(future: F) -> F::Output {
-        tokio::runtime::Builder::new_multi_thread()
+        tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .unwrap()

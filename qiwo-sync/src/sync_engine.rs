@@ -1,7 +1,7 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::Utc;
 use sha2::{Digest, Sha256};
 use tokio::fs;
@@ -15,9 +15,57 @@ const STATE_DIR: &str = ".qiwo-sync";
 const BACKUP_DIR: &str = "backups";
 const LOCAL_MANIFEST: &str = "manifest.json";
 const REMOTE_MANIFEST: &str = ".qiwo-sync-manifest.json";
+const USER_DICT_PREFIX: &str = "sync/";
+
+/// Which slice of the Rime directory a merge run is allowed to touch.
+///
+/// A run only ever rewrites manifest entries inside its own scope; everything
+/// outside is carried over untouched from the manifest it started from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MergeScope {
+    All,
+    UserDict,
+}
+
+impl MergeScope {
+    fn contains(&self, path: &str) -> bool {
+        match self {
+            MergeScope::All => true,
+            MergeScope::UserDict => path.starts_with(USER_DICT_PREFIX),
+        }
+    }
+}
+
+/// Returns `base` with its in-scope entries replaced by those from `updates`.
+fn merge_scoped(
+    base: &HashMap<String, SyncFileEntry>,
+    updates: &HashMap<String, SyncFileEntry>,
+    scope: MergeScope,
+) -> HashMap<String, SyncFileEntry> {
+    let mut merged: HashMap<String, SyncFileEntry> = base
+        .iter()
+        .filter(|(path, _)| !scope.contains(path))
+        .map(|(path, entry)| (path.clone(), entry.clone()))
+        .collect();
+
+    merged.extend(
+        updates
+            .iter()
+            .filter(|(path, _)| scope.contains(path))
+            .map(|(path, entry)| (path.clone(), entry.clone())),
+    );
+
+    merged
+}
 
 pub struct SyncEngine {
     selector: FileSelector,
+}
+
+impl Default for SyncEngine {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SyncEngine {
@@ -69,10 +117,7 @@ impl SyncEngine {
         let mut uploaded = 0u32;
         let mut messages = Vec::new();
 
-        let mut sorted: Vec<_> = local_files.iter().collect();
-        sorted.sort_by_key(|(k, _)| k.to_lowercase());
-
-        for (path, _entry) in &sorted {
+        for path in local_files.keys().collect::<BTreeSet<_>>() {
             if !request.dry_run {
                 let local_path = request.rime_user_dir.join(path);
                 webdav.put_file(path, &local_path).await?;
@@ -80,8 +125,10 @@ impl SyncEngine {
             uploaded += 1;
         }
 
-        let manifest = create_manifest(request, &local_files);
-        write_manifests(request, webdav, &manifest).await?;
+        // Push is "make the remote match this device", so both manifests become
+        // the local view.
+        let manifest = create_manifest(request, local_files);
+        write_manifests(request, webdav, &manifest, &manifest).await?;
 
         messages.push(format!("Pushed {} file(s).", uploaded));
         let mut summary = SyncSummary::new(SyncMode::Push, request.frontend, &request.device_id);
@@ -98,10 +145,7 @@ impl SyncEngine {
         let mut skipped = 0u32;
         let mut messages = Vec::new();
 
-        let mut sorted: Vec<_> = remote_manifest.files.iter().collect();
-        sorted.sort_by_key(|(k, _)| k.to_lowercase());
-
-        for (path, _entry) in &sorted {
+        for path in remote_manifest.files.keys().collect::<BTreeSet<_>>() {
             if !self.selector.should_sync(path) {
                 skipped += 1;
                 continue;
@@ -119,7 +163,7 @@ impl SyncEngine {
         } else {
             scan_local_files(&request.rime_user_dir, &self.selector)?
         };
-        let local_manifest = create_manifest(request, &local_files);
+        let local_manifest = create_manifest(request, local_files);
         if !request.dry_run {
             write_local_manifest(request, &local_manifest).await?;
         }
@@ -139,8 +183,15 @@ impl SyncEngine {
         let remote = read_remote_manifest(webdav).await?;
         let local_files = scan_local_files(&request.rime_user_dir, &self.selector)?;
 
-        self.do_three_way_merge(request, webdav, &local_files, &remote, &previous)
-            .await
+        self.do_three_way_merge(
+            request,
+            webdav,
+            &local_files,
+            &remote,
+            &previous,
+            MergeScope::All,
+        )
+        .await
     }
 
     // ---- SyncUserDict ----
@@ -154,29 +205,22 @@ impl SyncEngine {
         let remote = read_remote_manifest(webdav).await?;
         let local_files = scan_local_files(&request.rime_user_dir, &self.selector)?;
 
-        // Filter: only sync/ directory files
-        let local_dict: HashMap<String, SyncFileEntry> = local_files
-            .into_iter()
-            .filter(|(k, _)| k.starts_with("sync/"))
-            .collect();
-
-        let remote_dict: HashMap<String, SyncFileEntry> = remote
-            .files
-            .iter()
-            .filter(|(k, _)| k.starts_with("sync/"))
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
-
-        let filtered_remote = SyncManifest {
-            device_id: remote.device_id.clone(),
-            files: remote_dict,
-            ..SyncManifest::empty()
-        };
-
-        self.do_three_way_merge(request, webdav, &local_dict, &filtered_remote, &previous)
-            .await
+        // The remote manifest is passed through whole. `MergeScope::UserDict`
+        // narrows what gets *compared*, and the manifest writers below narrow
+        // what gets *rewritten* — pre-filtering here used to drop every
+        // out-of-scope remote entry from the manifest we published.
+        self.do_three_way_merge(
+            request,
+            webdav,
+            &local_files,
+            &remote,
+            &previous,
+            MergeScope::UserDict,
+        )
+        .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn do_three_way_merge(
         &self,
         request: &SyncRequest,
@@ -184,6 +228,7 @@ impl SyncEngine {
         local_files: &HashMap<String, SyncFileEntry>,
         remote_manifest: &SyncManifest,
         previous_manifest: &SyncManifest,
+        scope: MergeScope,
     ) -> Result<SyncSummary> {
         let mut uploaded = 0u32;
         let mut downloaded = 0u32;
@@ -191,12 +236,14 @@ impl SyncEngine {
         let mut conflicts = 0u32;
         let mut messages = Vec::new();
 
-        let mut all_paths: Vec<&String> = local_files
+        // BTreeSet both dedups and orders; the old sort-by-lowercase + dedup pair
+        // allocated a String per comparison and failed to dedup paths that
+        // differed only in case.
+        let all_paths: BTreeSet<&String> = local_files
             .keys()
             .chain(remote_manifest.files.keys())
+            .filter(|path| scope.contains(path))
             .collect();
-        all_paths.sort_by_key(|k| k.to_lowercase());
-        all_paths.dedup();
 
         for path in &all_paths {
             if !self.selector.should_sync(path) {
@@ -209,18 +256,18 @@ impl SyncEngine {
             let previous_entry = previous_manifest.files.get(*path);
 
             // Same hash on both sides → skip
-            if let (Some(l), Some(r)) = (local_entry, remote_entry) {
-                if l.sha256.eq_ignore_ascii_case(&r.sha256) {
-                    skipped += 1;
-                    continue;
-                }
+            if let (Some(l), Some(r)) = (local_entry, remote_entry)
+                && l.sha256.eq_ignore_ascii_case(&r.sha256)
+            {
+                skipped += 1;
+                continue;
             }
 
-            let local_changed = local_entry.map_or(false, |l| {
-                previous_entry.map_or(true, |p| !l.sha256.eq_ignore_ascii_case(&p.sha256))
+            let local_changed = local_entry.is_some_and(|l| {
+                previous_entry.is_none_or(|p| !l.sha256.eq_ignore_ascii_case(&p.sha256))
             });
-            let remote_changed = remote_entry.map_or(false, |r| {
-                previous_entry.map_or(true, |p| !r.sha256.eq_ignore_ascii_case(&p.sha256))
+            let remote_changed = remote_entry.is_some_and(|r| {
+                previous_entry.is_none_or(|p| !r.sha256.eq_ignore_ascii_case(&p.sha256))
             });
 
             match (local_entry, remote_entry) {
@@ -296,14 +343,23 @@ impl SyncEngine {
             }
         }
 
-        // Update both manifests
+        // Both manifests keep every entry this run did not look at. Rewriting
+        // them wholesale from a full local scan is what made `sync-user-dict`
+        // erase remote-only files from the published manifest.
         let final_files = if request.dry_run {
             local_files.clone()
         } else {
             scan_local_files(&request.rime_user_dir, &self.selector)?
         };
-        let final_manifest = create_manifest(request, &final_files);
-        write_manifests(request, webdav, &final_manifest).await?;
+        let local_update = create_manifest(
+            request,
+            merge_scoped(&previous_manifest.files, &final_files, scope),
+        );
+        let remote_update = create_manifest(
+            request,
+            merge_scoped(&remote_manifest.files, &final_files, scope),
+        );
+        write_manifests(request, webdav, &local_update, &remote_update).await?;
 
         let label = if request.mode == SyncMode::SyncUserDict {
             "Dict sync"
@@ -362,7 +418,7 @@ fn scan_dir(
             let last_write_utc = chrono::DateTime::from(
                 meta.modified()
                     .ok()
-                    .unwrap_or_else(|| std::time::SystemTime::now()),
+                    .unwrap_or_else(std::time::SystemTime::now),
             );
 
             entries.insert(
@@ -404,11 +460,22 @@ fn local_manifest_path(rime_user_dir: &Path) -> PathBuf {
 async fn read_local_manifest(request: &SyncRequest) -> Result<SyncManifest> {
     let path = local_manifest_path(&request.rime_user_dir);
     if !path.exists() {
+        // First run on this device: an empty baseline is the correct starting point.
         return Ok(SyncManifest::empty());
     }
 
     let data = fs::read(&path).await?;
-    Ok(serde_json::from_slice(&data).unwrap_or_else(|_| SyncManifest::empty()))
+
+    // A corrupt baseline must not be quietly treated as "nothing was ever
+    // synced": that makes every differing file look changed on both sides, so
+    // the merge takes the conflict branch and the remote copy wins across the
+    // board. Fail loudly and let the user decide to re-baseline.
+    serde_json::from_slice(&data).with_context(|| {
+        format!(
+            "local sync manifest is corrupt: {} — delete it to re-baseline this device",
+            path.display()
+        )
+    })
 }
 
 async fn write_local_manifest(request: &SyncRequest, manifest: &SyncManifest) -> Result<()> {
@@ -423,39 +490,44 @@ async fn write_local_manifest(request: &SyncRequest, manifest: &SyncManifest) ->
 }
 
 async fn read_remote_manifest(webdav: &WebDavClient) -> Result<SyncManifest> {
-    let bytes = webdav.get_bytes(REMOTE_MANIFEST).await?;
-    match bytes {
-        Some(data) => Ok(serde_json::from_slice(&data).unwrap_or_else(|_| SyncManifest::empty())),
-        None => Ok(SyncManifest::empty()),
-    }
+    let Some(data) = webdav.get_bytes(REMOTE_MANIFEST).await? else {
+        // No manifest published yet: this remote has never been synced to.
+        return Ok(SyncManifest::empty());
+    };
+
+    // Same reasoning as the local baseline — treating a truncated or half-written
+    // remote manifest as empty would republish it with only this device's view,
+    // dropping every file another device had uploaded.
+    serde_json::from_slice(&data).with_context(|| {
+        format!("remote sync manifest is corrupt: {REMOTE_MANIFEST} — delete it on the server to re-publish")
+    })
 }
 
 async fn write_manifests(
     request: &SyncRequest,
     webdav: &WebDavClient,
-    manifest: &SyncManifest,
+    local: &SyncManifest,
+    remote: &SyncManifest,
 ) -> Result<()> {
     if request.dry_run {
         return Ok(());
     }
 
-    write_local_manifest(request, manifest).await?;
-    let json = serde_json::to_vec_pretty(manifest)?;
+    write_local_manifest(request, local).await?;
+    let json = serde_json::to_vec_pretty(remote)?;
     webdav.put_bytes(REMOTE_MANIFEST, json).await?;
     Ok(())
 }
 
-fn create_manifest(request: &SyncRequest, files: &HashMap<String, SyncFileEntry>) -> SyncManifest {
+fn create_manifest(request: &SyncRequest, files: HashMap<String, SyncFileEntry>) -> SyncManifest {
     SyncManifest {
         version: 1,
         device_id: request.device_id.clone(),
         frontend: request.frontend.as_str().to_string(),
         updated_at_utc: Utc::now(),
-        files: files.clone(),
+        files,
     }
 }
-
-// ---- Backup ----
 
 fn backup_local_file(rime_user_dir: &Path, relative_path: &str) -> Result<()> {
     let src = rime_user_dir.join(relative_path);
@@ -476,4 +548,83 @@ fn backup_local_file(rime_user_dir: &Path, relative_path: &str) -> Result<()> {
 
     std::fs::copy(&src, &backup_path)?;
     Ok(())
+}
+
+// ---- Backup ----
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(path: &str, sha: &str) -> (String, SyncFileEntry) {
+        (
+            path.to_string(),
+            SyncFileEntry {
+                relative_path: path.to_string(),
+                size: 1,
+                sha256: sha.to_string(),
+                last_write_utc: Utc::now(),
+                e_tag: None,
+            },
+        )
+    }
+
+    fn manifest_of(entries: &[(&str, &str)]) -> HashMap<String, SyncFileEntry> {
+        entries.iter().map(|(p, s)| entry(p, s)).collect()
+    }
+
+    #[test]
+    fn user_dict_scope_only_covers_the_sync_directory() {
+        assert!(MergeScope::UserDict.contains("sync/android/rime_frost.userdb.txt"));
+        assert!(!MergeScope::UserDict.contains("lua/corrector.lua"));
+        assert!(!MergeScope::UserDict.contains("default.custom.yaml"));
+        assert!(MergeScope::All.contains("default.custom.yaml"));
+    }
+
+    /// The `sync-user-dict` regression: a dictionary-only run used to republish a
+    /// manifest built from a full local scan, so files another device had
+    /// uploaded but this one had never pulled vanished from the remote manifest.
+    #[test]
+    fn user_dict_merge_preserves_remote_only_entries_outside_the_scope() {
+        let remote = manifest_of(&[
+            ("lua/from-other-device.lua", "aaa"),
+            ("sync/android/dict.txt", "old"),
+        ]);
+        let local_scan = manifest_of(&[("sync/android/dict.txt", "new")]);
+
+        let merged = merge_scoped(&remote, &local_scan, MergeScope::UserDict);
+
+        assert_eq!(
+            merged["lua/from-other-device.lua"].sha256, "aaa",
+            "an out-of-scope remote entry must survive a user-dict run"
+        );
+        assert_eq!(merged["sync/android/dict.txt"].sha256, "new");
+        assert_eq!(merged.len(), 2);
+    }
+
+    #[test]
+    fn user_dict_merge_drops_scoped_entries_that_no_longer_exist_locally() {
+        let base = manifest_of(&[
+            ("default.custom.yaml", "keep"),
+            ("sync/retired-device/dict.txt", "gone"),
+        ]);
+        let local_scan = manifest_of(&[("sync/android/dict.txt", "new")]);
+
+        let merged = merge_scoped(&base, &local_scan, MergeScope::UserDict);
+
+        assert!(merged.contains_key("default.custom.yaml"));
+        assert!(!merged.contains_key("sync/retired-device/dict.txt"));
+        assert!(merged.contains_key("sync/android/dict.txt"));
+    }
+
+    #[test]
+    fn full_scope_merge_replaces_everything() {
+        let base = manifest_of(&[("a.custom.yaml", "old"), ("b.custom.yaml", "old")]);
+        let local_scan = manifest_of(&[("a.custom.yaml", "new")]);
+
+        let merged = merge_scoped(&base, &local_scan, MergeScope::All);
+
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged["a.custom.yaml"].sha256, "new");
+    }
 }

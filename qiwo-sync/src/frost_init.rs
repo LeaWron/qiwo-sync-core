@@ -233,7 +233,11 @@ async fn ensure_custom_yaml_file(
                 return Ok(true);
             }
 
-            fs::write(&file, append_yaml_patch_entries(&existing, &missing_entries)).await?;
+            fs::write(
+                &file,
+                append_yaml_patch_entries(&existing, &missing_entries),
+            )
+            .await?;
             return Ok(true);
         }
     }
@@ -292,10 +296,16 @@ mod tests {
     use std::fs as std_fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use tokio::runtime::Runtime;
-
     use super::*;
     use crate::types::{Frontend, SyncMode, SyncRequest};
+
+    // Current-thread on purpose: see the note in `webdav_client`'s tests.
+    fn runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+    }
 
     fn temp_dir(name: &str) -> std::path::PathBuf {
         let nanos = SystemTime::now()
@@ -307,7 +317,7 @@ mod tests {
 
     #[test]
     fn init_frost_creates_qiwo_custom_patches() {
-        let rt = Runtime::new().unwrap();
+        let rt = runtime();
         let frost_dir = temp_dir("frost");
         let user_dir = temp_dir("user");
         std_fs::create_dir_all(&frost_dir).unwrap();
@@ -357,7 +367,7 @@ mod tests {
 
     #[test]
     fn init_frost_merges_qiwo_patches_into_existing_custom_files() {
-        let rt = Runtime::new().unwrap();
+        let rt = runtime();
         let frost_dir = temp_dir("frost-existing");
         let user_dir = temp_dir("user-existing");
         std_fs::create_dir_all(&frost_dir).unwrap();

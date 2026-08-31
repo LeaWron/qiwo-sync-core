@@ -108,12 +108,7 @@ impl InstallationHelper {
 }
 
 fn make_safe_id(device_id: &str) -> String {
-    let safe = device_id
-        .replace(' ', "-")
-        .replace(':', "-")
-        .replace('\\', "-")
-        .replace('/', "-")
-        .to_lowercase();
+    let safe = device_id.replace([' ', ':', '\\', '/'], "-").to_lowercase();
     if safe.trim().is_empty() {
         "unknown".to_string()
     } else {
