@@ -1,6 +1,7 @@
 pub mod file_selector;
 pub mod frost_init;
 pub mod installation;
+mod paths;
 pub mod sync_engine;
 pub mod types;
 pub mod webdav_client;
@@ -69,10 +70,14 @@ pub(crate) fn run_sync(request: SyncRequest) -> String {
 
 /// Free a string returned by qiwo_sync().
 ///
+/// Named with the crate prefix like every other exported symbol: the previous
+/// `free_c_string` is the kind of name that collides when this is linked into a
+/// host that already exports its own C helpers.
+///
 /// # Safety
 /// `ptr` must have been returned by qiwo_sync().
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn free_c_string(ptr: *mut c_char) {
+pub unsafe extern "C" fn qiwo_sync_free_string(ptr: *mut c_char) {
     if ptr.is_null() {
         return;
     }

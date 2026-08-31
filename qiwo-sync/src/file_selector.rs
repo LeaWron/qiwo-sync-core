@@ -13,6 +13,7 @@
 /// entry point and does sync.
 ///
 /// **This list is mirrored in `FileSelector.kt` in qiwo-android. Change both.**
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct FileSelector;
 
 impl FileSelector {
@@ -26,7 +27,7 @@ impl FileSelector {
     const EXCLUDED_SUFFIXES: &'static [&'static str] = &[".userdb"];
 
     pub fn should_sync(&self, relative_path: &str) -> bool {
-        let path = normalize_path(relative_path);
+        let path = crate::paths::normalize_relative(relative_path);
         let lower = path.to_lowercase();
 
         // 排除特定目录
@@ -73,10 +74,36 @@ impl FileSelector {
 
         false
     }
-}
 
-fn normalize_path(path: &str) -> String {
-    path.replace('\\', "/").trim_start_matches('/').to_string()
+    /// Whether a directory can contain anything [`Self::should_sync`] accepts.
+    ///
+    /// Used to prune the scan. Derived from the same two lists rather than
+    /// hard-coded, so it stays correct if the include set changes: a directory
+    /// is worth entering only when it lies on the path to an included
+    /// directory, in either direction.
+    pub fn should_descend(&self, relative_dir: &str) -> bool {
+        let dir = crate::paths::normalize_relative(relative_dir);
+        if dir.is_empty() {
+            return true;
+        }
+
+        let lower = format!("{}/", dir.to_lowercase());
+
+        if Self::EXCLUDED_DIRECTORIES
+            .iter()
+            .any(|d| lower.starts_with(d))
+        {
+            return false;
+        }
+
+        if lower.split('/').any(|seg| seg.ends_with(".userdb")) {
+            return false;
+        }
+
+        Self::INCLUDED_DIRECTORIES
+            .iter()
+            .any(|d| lower.starts_with(d) || d.starts_with(&lower))
+    }
 }
 
 #[cfg(test)]
@@ -155,5 +182,54 @@ mod tests {
     fn test_exclude_qiwo_sync_state() {
         let fs = FileSelector;
         assert!(!fs.should_sync(".qiwo-sync/manifest.json"));
+    }
+
+    #[test]
+    fn descends_only_into_directories_that_can_hold_synced_files() {
+        let fs = FileSelector;
+        // The scan root, and the one included directory tree.
+        assert!(fs.should_descend(""));
+        assert!(fs.should_descend("sync"));
+        assert!(fs.should_descend("sync/windows-main"));
+        assert!(fs.should_descend("sync\\android"));
+
+        // Distributed data: only ever holds files should_sync() rejects.
+        assert!(!fs.should_descend("cn_dicts"));
+        assert!(!fs.should_descend("cn_dicts_cell"));
+        assert!(!fs.should_descend("opencc"));
+        assert!(!fs.should_descend("lua"));
+        assert!(!fs.should_descend("lua/aux_code"));
+
+        // Explicitly excluded, plus the LevelDB stores.
+        assert!(!fs.should_descend("build"));
+        assert!(!fs.should_descend(".git"));
+        assert!(!fs.should_descend(".qiwo-sync"));
+        assert!(!fs.should_descend(".qiwo-sync/backups"));
+        assert!(!fs.should_descend("rime_frost.userdb"));
+        assert!(!fs.should_descend("sync/android/rime_frost.userdb"));
+    }
+
+    /// Pruning must never skip a directory that holds a file we would sync.
+    #[test]
+    fn pruning_never_hides_a_syncable_file() {
+        let fs = FileSelector;
+        for path in [
+            "sync/windows-main/rime_frost.userdb.txt",
+            "sync/android/melt_eng.userdb.txt",
+            "default.custom.yaml",
+            "custom_phrase.txt",
+        ] {
+            assert!(fs.should_sync(path), "fixture {path} should sync");
+
+            // Every ancestor directory must be reachable.
+            let segments: Vec<&str> = path.split('/').collect();
+            for depth in 0..segments.len() - 1 {
+                let dir = segments[..=depth].join("/");
+                assert!(
+                    fs.should_descend(&dir),
+                    "pruning at {dir} would hide {path}"
+                );
+            }
+        }
     }
 }

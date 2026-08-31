@@ -23,8 +23,16 @@ pub enum Frontend {
     Squirrel,
     IbusRime,
     Trime,
+    /// The Android frontend.
+    ///
+    /// Serialises as `qiwo-android`; the older `qiwo-yuyan` and bare `yuyan*`
+    /// spellings stay readable so manifests written before the fcitx5-android
+    /// rebase still parse. The serialised value ends up in the manifest that is
+    /// published to the user's WebDAV server, which is why it no longer says
+    /// "yuyan".
     #[serde(
-        rename = "qiwo-yuyan",
+        rename = "qiwo-android",
+        alias = "qiwo-yuyan",
         alias = "qiwoime",
         alias = "qiwo",
         alias = "qiwo-ime",
@@ -42,7 +50,7 @@ impl Frontend {
             Frontend::Squirrel => "Squirrel",
             Frontend::IbusRime => "IbusRime",
             Frontend::Trime => "Trime",
-            Frontend::QiwoIme => "qiwo-yuyan",
+            Frontend::QiwoIme => "qiwo-android",
         }
     }
 }
@@ -142,6 +150,10 @@ mod tests {
     #[test]
     fn frontend_deserializes_qiwo_android_identity() {
         assert_eq!(
+            serde_json::from_str::<Frontend>("\"qiwo-android\"").unwrap(),
+            Frontend::QiwoIme
+        );
+        assert_eq!(
             serde_json::from_str::<Frontend>("\"qiwo-yuyan\"").unwrap(),
             Frontend::QiwoIme
         );
@@ -171,7 +183,7 @@ mod tests {
         );
         assert_eq!(
             serde_json::to_string(&Frontend::QiwoIme).unwrap(),
-            "\"qiwo-yuyan\""
+            "\"qiwo-android\""
         );
     }
 }

@@ -36,8 +36,10 @@ struct SyncArgs {
     remote_url: String,
     #[arg(long)]
     username: Option<String>,
-    #[arg(long)]
-    password: Option<String>,
+    /// Name of the environment variable holding the WebDAV password.
+    ///
+    /// There is deliberately no `--password`: a command line is readable by any
+    /// process running as the same user, and lands in shell history.
     #[arg(long)]
     password_env: Option<String>,
     #[arg(long)]
@@ -65,14 +67,8 @@ struct InitFrostArgs {
     dry_run: bool,
 }
 
-fn resolve_password(password: Option<String>, password_env: Option<String>) -> Option<String> {
-    if password.is_some() {
-        return password;
-    }
-    if let Some(env_var) = password_env {
-        return std::env::var(&env_var).ok();
-    }
-    None
+fn resolve_password(password_env: Option<&str>) -> Option<String> {
+    std::env::var(password_env?).ok()
 }
 
 fn parse_frontend(value: &str) -> Result<Frontend, String> {
@@ -81,7 +77,7 @@ fn parse_frontend(value: &str) -> Result<Frontend, String> {
         "squirrel" => Ok(Frontend::Squirrel),
         "ibus-rime" | "ibus" => Ok(Frontend::IbusRime),
         "trime" => Ok(Frontend::Trime),
-        "qiwo-yuyan" | "qiwoime" | "qiwo" | "qiwo-ime" => Ok(Frontend::QiwoIme),
+        "qiwo-android" | "qiwo-yuyan" | "qiwoime" | "qiwo" | "qiwo-ime" => Ok(Frontend::QiwoIme),
         "yuyanime" | "yuyan" | "yuyan-ime" => Ok(Frontend::QiwoIme),
         _ => Err(format!("Unknown frontend: {}", value)),
     }
@@ -136,7 +132,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let frontend = parse_frontend(&args.frontend)?;
     let device_id = args.device_id.clone().unwrap_or_else(hostname);
-    let password = resolve_password(args.password.clone(), args.password_env.clone());
+    let password = resolve_password(args.password_env.as_deref());
 
     let request = SyncRequest {
         frontend,

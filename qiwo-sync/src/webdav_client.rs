@@ -6,7 +6,6 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use reqwest::Method;
 use reqwest::StatusCode;
-use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
@@ -14,10 +13,19 @@ use tokio::sync::Mutex;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const READ_TIMEOUT: Duration = Duration::from_secs(60);
 
+fn propfind() -> Method {
+    Method::from_bytes(b"PROPFIND").expect("PROPFIND is a valid method name")
+}
+
+fn mkcol() -> Method {
+    Method::from_bytes(b"MKCOL").expect("MKCOL is a valid method name")
+}
+
 pub struct WebDavClient {
     client: reqwest::Client,
     base_url: String,
     known_collections: Arc<Mutex<HashSet<String>>>,
+    credentials: Option<(String, String)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,12 +36,6 @@ enum CollectionProbe {
 
 impl WebDavClient {
     pub fn new(base_url: &str, username: Option<&str>, password: Option<&str>) -> Result<Self> {
-        let mut headers = HeaderMap::new();
-        if let (Some(u), Some(p)) = (username, password) {
-            let auth = format!("Basic {}", base64_encode(format!("{}:{}", u, p).as_bytes()));
-            headers.insert(AUTHORIZATION, HeaderValue::from_str(&auth)?);
-        }
-
         // Validate base URL
         let base = base_url.trim_end_matches('/').to_string();
         reqwest::Url::parse(&base).context("Invalid remote URL")?;
@@ -42,17 +44,34 @@ impl WebDavClient {
         // talking wedges the whole sync forever. Values match the Android Kotlin
         // client (WebDavClient.kt) so both frontends give up at the same point.
         let client = reqwest::Client::builder()
-            .default_headers(headers)
             .user_agent("QiwoSync/1.0")
             .connect_timeout(CONNECT_TIMEOUT)
             .read_timeout(READ_TIMEOUT)
             .build()?;
 
+        // Credentials go through reqwest's `basic_auth` per request rather than a
+        // hand-rolled Authorization header, which also keeps the password out of
+        // the client's default header map.
+        let credentials = match (username, password) {
+            (Some(u), Some(p)) => Some((u.to_owned(), p.to_owned())),
+            _ => None,
+        };
+
         Ok(Self {
             client,
             base_url: format!("{}/", base),
             known_collections: Arc::new(Mutex::new(HashSet::new())),
+            credentials,
         })
+    }
+
+    /// Starts a request with credentials attached when they were configured.
+    fn request(&self, method: Method, url: &str) -> reqwest::RequestBuilder {
+        let builder = self.client.request(method, url);
+        match &self.credentials {
+            Some((user, password)) => builder.basic_auth(user, Some(password)),
+            None => builder,
+        }
     }
 
     pub async fn ensure_root(&self) -> Result<()> {
@@ -61,25 +80,19 @@ impl WebDavClient {
 
     /// Upload a local file.
     pub async fn put_file(&self, relative_path: &str, local_path: &Path) -> Result<()> {
-        if let Some(parent) = Path::new(relative_path).parent()
-            && let Some(parent_str) = parent.to_str()
-            && !parent_str.is_empty()
-            && parent_str != "."
-        {
-            self.ensure_collection(parent_str).await?;
-        }
-
+        self.ensure_parent_collection(relative_path).await?;
         let url = self.build_url(relative_path);
         let data = fs::read(local_path).await?;
-        let resp = self.client.put(&url).body(data).send().await?;
+        let resp = self.request(Method::PUT, &url).body(data).send().await?;
 
         ensure_success(resp, &url)
     }
 
     /// Upload bytes.
     pub async fn put_bytes(&self, relative_path: &str, bytes: Vec<u8>) -> Result<()> {
+        self.ensure_parent_collection(relative_path).await?;
         let url = self.build_url(relative_path);
-        let resp = self.client.put(&url).body(bytes).send().await?;
+        let resp = self.request(Method::PUT, &url).body(bytes).send().await?;
 
         ensure_success(resp, &url)
     }
@@ -87,7 +100,7 @@ impl WebDavClient {
     /// Download bytes. Returns None if 404.
     pub async fn get_bytes(&self, relative_path: &str) -> Result<Option<Vec<u8>>> {
         let url = self.build_url(relative_path);
-        let resp = self.client.get(&url).send().await?;
+        let resp = self.request(Method::GET, &url).send().await?;
 
         if resp.status() == StatusCode::NOT_FOUND {
             return Ok(None);
@@ -110,7 +123,7 @@ impl WebDavClient {
     /// user dictionary snapshot — in the live Rime directory.
     pub async fn download_file(&self, relative_path: &str, target: &Path) -> Result<()> {
         let url = self.build_url(relative_path);
-        let resp = self.client.get(&url).send().await?;
+        let resp = self.request(Method::GET, &url).send().await?;
 
         if !resp.status().is_success() {
             anyhow::bail!("GET {} failed: HTTP {}", url, resp.status().as_u16());
@@ -134,8 +147,25 @@ impl WebDavClient {
 
     // ---- internal helpers ----
 
+    /// Creates the collections leading up to `relative_path`, if any.
+    ///
+    /// Both upload paths go through this. `put_bytes` used to skip it, which
+    /// only worked because the one thing it uploads lives at the root.
+    async fn ensure_parent_collection(&self, relative_path: &str) -> Result<()> {
+        let normalized = crate::paths::normalize_relative(relative_path);
+        let Some((parent, _)) = normalized.rsplit_once('/') else {
+            return Ok(());
+        };
+
+        if parent.is_empty() {
+            return Ok(());
+        }
+
+        self.ensure_collection(parent).await
+    }
+
     fn build_url(&self, relative_path: &str) -> String {
-        let path = normalize_path(relative_path);
+        let path = crate::paths::normalize_relative(relative_path);
         let encoded = path
             .split('/')
             .map(urlencoding)
@@ -145,7 +175,7 @@ impl WebDavClient {
     }
 
     async fn ensure_collection(&self, relative_path: &str) -> Result<()> {
-        let normalized = normalize_path(relative_path);
+        let normalized = crate::paths::normalize_relative(relative_path);
         let segments: Vec<&str> = normalized.split('/').filter(|s| !s.is_empty()).collect();
 
         if segments.is_empty() {
@@ -166,7 +196,7 @@ impl WebDavClient {
     }
 
     async fn ensure_collection_exists(&self, relative_path: &str) -> Result<()> {
-        let normalized = normalize_path(relative_path);
+        let normalized = crate::paths::normalize_relative(relative_path);
         {
             let known = self.known_collections.lock().await;
             if known.contains(&normalized) {
@@ -191,8 +221,7 @@ impl WebDavClient {
         };
 
         let resp = self
-            .client
-            .request(Method::from_bytes(b"PROPFIND").unwrap(), &url)
+            .request(propfind(), &url)
             .header("Depth", "0")
             .send()
             .await?;
@@ -222,11 +251,7 @@ impl WebDavClient {
             self.build_url(relative_path)
         };
 
-        let resp = self
-            .client
-            .request(Method::from_bytes(b"MKCOL").unwrap(), &url)
-            .send()
-            .await?;
+        let resp = self.request(mkcol(), &url).send().await?;
 
         let status_code = resp.status();
         match status_code {
@@ -282,10 +307,6 @@ fn ensure_success(resp: reqwest::Response, url: &str) -> Result<()> {
     }
 }
 
-fn normalize_path(path: &str) -> String {
-    path.replace('\\', "/").trim_start_matches('/').to_string()
-}
-
 fn urlencoding(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
     for &b in s.as_bytes() {
@@ -296,31 +317,6 @@ fn urlencoding(s: &str) -> String {
             _ => {
                 result.push_str(&format!("%{:02X}", b));
             }
-        }
-    }
-    result
-}
-
-fn base64_encode(data: &[u8]) -> String {
-    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut result = String::new();
-    for chunk in data.chunks(3) {
-        let b0 = chunk[0] as u32;
-        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
-        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
-        let n = (b0 << 16) | (b1 << 8) | b2;
-
-        result.push(CHARS[((n >> 18) & 0x3F) as usize] as char);
-        result.push(CHARS[((n >> 12) & 0x3F) as usize] as char);
-        if chunk.len() > 1 {
-            result.push(CHARS[((n >> 6) & 0x3F) as usize] as char);
-        } else {
-            result.push('=');
-        }
-        if chunk.len() > 2 {
-            result.push(CHARS[(n & 0x3F) as usize] as char);
-        } else {
-            result.push('=');
         }
     }
     result

@@ -35,6 +35,9 @@ cargo run -p qiwo-rime-sync -- sync \
   --remote-url "https://dav.example.com/qiwo-rime-sync" \
   --username "name" \
   --password-env QIWO_WEBDAV_PASSWORD \
+  # there is no --password: a command line is readable by any process running
+  # as the same user, and lands in shell history. Frontends set the variable in
+  # the child's environment instead.
   --device-id "windows-main"
 ```
 

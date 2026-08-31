@@ -113,7 +113,7 @@ impl SyncEngine {
     // ---- Push ----
 
     async fn push(&self, request: &SyncRequest, webdav: &WebDavClient) -> Result<SyncSummary> {
-        let local_files = scan_local_files(&request.rime_user_dir, &self.selector)?;
+        let local_files = scan_local_files(&request.rime_user_dir, &self.selector).await?;
         let mut uploaded = 0u32;
         let mut messages = Vec::new();
 
@@ -161,7 +161,7 @@ impl SyncEngine {
         let local_files = if request.dry_run {
             remote_manifest.files.clone()
         } else {
-            scan_local_files(&request.rime_user_dir, &self.selector)?
+            scan_local_files(&request.rime_user_dir, &self.selector).await?
         };
         let local_manifest = create_manifest(request, local_files);
         if !request.dry_run {
@@ -181,7 +181,7 @@ impl SyncEngine {
     async fn sync(&self, request: &SyncRequest, webdav: &WebDavClient) -> Result<SyncSummary> {
         let previous = read_local_manifest(request).await?;
         let remote = read_remote_manifest(webdav).await?;
-        let local_files = scan_local_files(&request.rime_user_dir, &self.selector)?;
+        let local_files = scan_local_files(&request.rime_user_dir, &self.selector).await?;
 
         self.do_three_way_merge(
             request,
@@ -203,7 +203,7 @@ impl SyncEngine {
     ) -> Result<SyncSummary> {
         let previous = read_local_manifest(request).await?;
         let remote = read_remote_manifest(webdav).await?;
-        let local_files = scan_local_files(&request.rime_user_dir, &self.selector)?;
+        let local_files = scan_local_files(&request.rime_user_dir, &self.selector).await?;
 
         // The remote manifest is passed through whole. `MergeScope::UserDict`
         // narrows what gets *compared*, and the manifest writers below narrow
@@ -308,7 +308,7 @@ impl SyncEngine {
                         // Both changed → conflict: backup local, remote wins
                         (true, true) => {
                             if !request.dry_run {
-                                backup_local_file(&request.rime_user_dir, &l.relative_path)?;
+                                backup_local_file(&request.rime_user_dir, &l.relative_path).await?;
                                 let target = request.rime_user_dir.join(&r.relative_path);
                                 webdav.download_file(&r.relative_path, &target).await?;
                             }
@@ -346,10 +346,18 @@ impl SyncEngine {
         // Both manifests keep every entry this run did not look at. Rewriting
         // them wholesale from a full local scan is what made `sync-user-dict`
         // erase remote-only files from the published manifest.
-        let final_files = if request.dry_run {
+        //
+        // The rescan is skipped when nothing moved — which is the common case for
+        // a periodic sync — because then the opening scan still describes the
+        // directory exactly. It is deliberately *not* replaced by patching in the
+        // remote manifest's entries for downloaded paths: a stale remote manifest
+        // would then silently become our local baseline, and the rescan is the
+        // only thing that keeps the baseline authoritative.
+        let transferred = uploaded + downloaded;
+        let final_files = if request.dry_run || transferred == 0 {
             local_files.clone()
         } else {
-            scan_local_files(&request.rime_user_dir, &self.selector)?
+            scan_local_files(&request.rime_user_dir, &self.selector).await?
         };
         let local_update = create_manifest(
             request,
@@ -383,7 +391,21 @@ impl SyncEngine {
 
 // ---- File scanning ----
 
-fn scan_local_files(
+/// Walks the Rime user directory on a blocking thread.
+///
+/// Directory traversal plus SHA-256 of every candidate is genuinely blocking
+/// work; running it inline on the runtime stalled every other task on the same
+/// worker, which on Android is the whole sync.
+async fn scan_local_files(
+    rime_user_dir: &Path,
+    selector: &FileSelector,
+) -> Result<HashMap<String, SyncFileEntry>> {
+    let dir = rime_user_dir.to_path_buf();
+    let selector = *selector;
+    tokio::task::spawn_blocking(move || scan_local_files_blocking(&dir, &selector)).await?
+}
+
+fn scan_local_files_blocking(
     rime_user_dir: &Path,
     selector: &FileSelector,
 ) -> Result<HashMap<String, SyncFileEntry>> {
@@ -411,7 +433,13 @@ fn scan_dir(
             .replace('\\', "/");
 
         if path.is_dir() {
-            scan_dir(base, &path, selector, entries)?;
+            // Pruning matters: `build/` holds the compiled prism and table files,
+            // `*.userdb/` the LevelDB store, and a directory left over from the
+            // old init-frost behaviour can still hold 153 MB. None of it can ever
+            // contain a syncable file, so descending was pure stat traffic.
+            if selector.should_descend(&relative) {
+                scan_dir(base, &path, selector, entries)?;
+            }
         } else if selector.should_sync(&relative) {
             let meta = entry.metadata()?;
             let sha256 = sha256_file(&path)?;
@@ -529,7 +557,17 @@ fn create_manifest(request: &SyncRequest, files: HashMap<String, SyncFileEntry>)
     }
 }
 
-fn backup_local_file(rime_user_dir: &Path, relative_path: &str) -> Result<()> {
+/// Copies a file into `.qiwo-sync/backups/<timestamp>/` before it is overwritten.
+///
+/// On a blocking thread for the same reason as the scan: a conflicting user
+/// dictionary snapshot can be several megabytes.
+async fn backup_local_file(rime_user_dir: &Path, relative_path: &str) -> Result<()> {
+    let dir = rime_user_dir.to_path_buf();
+    let relative = relative_path.to_owned();
+    tokio::task::spawn_blocking(move || backup_local_file_blocking(&dir, &relative)).await?
+}
+
+fn backup_local_file_blocking(rime_user_dir: &Path, relative_path: &str) -> Result<()> {
     let src = rime_user_dir.join(relative_path);
     if !src.exists() {
         return Ok(());
