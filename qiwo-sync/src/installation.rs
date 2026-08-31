@@ -14,7 +14,7 @@ impl InstallationHelper {
     /// 如果文件已存在，会把 installation_id 对齐到 WebDAV 设置里的 device_id。
     pub async fn ensure(rime_user_dir: &Path, device_id: &str) -> Result<()> {
         let file = rime_user_dir.join("installation.yaml");
-        let safe_id = make_safe_id(device_id);
+        let safe_id = safe_device_id(device_id);
 
         if file.exists() {
             let content = fs::read_to_string(&file).await?;
@@ -78,7 +78,7 @@ impl InstallationHelper {
     ) -> Result<std::path::PathBuf> {
         let dir = rime_user_dir
             .join(Self::SYNC_DIR)
-            .join(make_safe_id(device_id));
+            .join(safe_device_id(device_id));
         std::fs::create_dir_all(&dir)?;
         Ok(dir)
     }
@@ -88,7 +88,7 @@ impl InstallationHelper {
             return Ok(());
         };
 
-        let old_safe_id = make_safe_id(old_id);
+        let old_safe_id = safe_device_id(old_id);
         if old_safe_id == new_id {
             return Ok(());
         }
@@ -107,12 +107,41 @@ impl InstallationHelper {
     }
 }
 
-fn make_safe_id(device_id: &str) -> String {
-    let safe = device_id.replace([' ', ':', '\\', '/'], "-").to_lowercase();
-    if safe.trim().is_empty() {
+/// Normalises a configured device id into one that is safe everywhere it lands.
+///
+/// The id is not just a label: it becomes a directory name under `sync/`, a
+/// segment of the WebDAV path, and the value of `installation_id` inside a
+/// double-quoted YAML scalar in `installation.yaml`. The old rule blacklisted
+/// four characters and missed `"`, so a device named `my"device` produced
+/// `installation_id: "my"device"` — invalid YAML that stops Rime deploying,
+/// with nothing pointing at the cause. A newline was worse: it injected
+/// arbitrary lines into the file.
+///
+/// Whitelisting instead of blacklisting also makes the result identical to what
+/// Android's `defaultDeviceId()` generates, so the two frontends agree on the
+/// `sync/<id>/` directory name.
+///
+/// **Mirrored by `safeDeviceId` in qiwo-android's `QiwoSync.kt`, and pinned by
+/// `tests/fixtures/device_id_cases.jsonl`. Change all of them together.**
+pub fn safe_device_id(device_id: &str) -> String {
+    let mut out = String::with_capacity(device_id.len());
+    for ch in device_id.chars() {
+        let mapped = match ch.to_ascii_lowercase() {
+            c @ ('a'..='z' | '0'..='9' | '.' | '_' | '-') => c,
+            _ => '-',
+        };
+        // Collapse runs of the replacement character.
+        if mapped == '-' && out.ends_with('-') {
+            continue;
+        }
+        out.push(mapped);
+    }
+
+    let trimmed = out.trim_matches('-');
+    if trimmed.is_empty() {
         "unknown".to_string()
     } else {
-        safe
+        trimmed.to_string()
     }
 }
 

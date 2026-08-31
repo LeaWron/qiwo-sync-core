@@ -1,0 +1,23 @@
+{"input":"windows-main","expected":"windows-main","why":"已合规的 id 原样保留"}
+{"input":"android-pixel-7","expected":"android-pixel-7","why":"Android defaultDeviceId() 的产物必须是不动点"}
+{"input":"DESKTOP-ABC123","expected":"desktop-abc123","why":"统一小写，否则大小写敏感的文件系统上会分裂成两个 sync 目录"}
+{"input":"windows_main","expected":"windows_main","why":"下划线是白名单字符"}
+{"input":"v1.2","expected":"v1.2","why":"点号是白名单字符"}
+{"input":"My Laptop","expected":"my-laptop","why":"空格替换为连字符"}
+{"input":"host:1234","expected":"host-1234","why":"冒号在 Windows 路径里非法"}
+{"input":"a/b","expected":"a-b","why":"斜杠会在 sync/ 下多开一层目录"}
+{"input":"a\\b","expected":"a-b","why":"反斜杠同上"}
+{"input":"my\"device","expected":"my-device","why":"引号会让 installation_id: \"...\" 变成非法 YAML —— 旧的黑名单规则漏了它"}
+{"input":"my'device","expected":"my-device","why":"单引号同理"}
+{"input":"bad\nid","expected":"bad-id","why":"换行会往 installation.yaml 注入额外行"}
+{"input":"bad\tid","expected":"bad-id","why":"制表符"}
+{"input":"star*mark?","expected":"star-mark","why":"Windows 文件名非法字符，尾部连字符被裁掉"}
+{"input":"a<b>c|d","expected":"a-b-c-d","why":"Windows 文件名非法字符"}
+{"input":"a::b","expected":"a-b","why":"连续的替换字符折叠为一个"}
+{"input":"  padded  ","expected":"padded","why":"首尾空白折叠后被裁掉"}
+{"input":"---","expected":"unknown","why":"全部被裁掉后回退到 unknown"}
+{"input":"","expected":"unknown","why":"空输入回退"}
+{"input":"   ","expected":"unknown","why":"纯空白回退"}
+{"input":"我的电脑","expected":"unknown","why":"非 ASCII 全部替换后被裁空，回退 unknown"}
+{"input":"laptop-我的","expected":"laptop","why":"混合输入保留 ASCII 部分"}
+{"input":"...","expected":"...","why":"点号在白名单内，不会被裁（trim 只裁连字符）"}
