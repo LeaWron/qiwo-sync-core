@@ -17,3 +17,6 @@ walkdir = "2"
 [lib]
 name = "qiwo_sync"
 crate-type = ["lib", "cdylib"]
+
+[dev-dependencies]
+serde_json = "1"

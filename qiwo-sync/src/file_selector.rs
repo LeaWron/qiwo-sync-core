@@ -1,11 +1,24 @@
 /// Selects Rime files that are safe to share through WebDAV.
+///
+/// Only the *personal* layer syncs. Schemas, dictionaries, opencc data and lua
+/// ship with the installer into Rime's shared data directory and are identical
+/// on every device, so putting them on the user's WebDAV server would push
+/// ~44 MB of redistributable data per device for no benefit — and it
+/// contradicts the project rule that the main dictionary is distributed, not
+/// synced. What the user actually authors lives in `*.custom.yaml`,
+/// `custom_phrase.txt` and the `sync/` snapshots.
+///
+/// Editing `cn_dicts/` or `opencc/` directly is an advanced move and is the
+/// user's own to manage; `*.custom.yaml` is Rime's supported customisation
+/// entry point and does sync.
+///
+/// **This list is mirrored in `FileSelector.kt` in qiwo-android. Change both.**
 pub struct FileSelector;
 
 impl FileSelector {
-    const INCLUDED_EXACT: &'static [&'static str] = &["custom_phrase.txt", "symbols.yaml"];
-    const INCLUDED_EXTENSIONS: &'static [&'static str] =
-        &[".custom.yaml", ".schema.yaml", ".dict.yaml"];
-    const INCLUDED_DIRECTORIES: &'static [&'static str] = &["opencc/", "lua/", "sync/"];
+    const INCLUDED_EXACT: &'static [&'static str] = &["custom_phrase.txt"];
+    const INCLUDED_EXTENSIONS: &'static [&'static str] = &[".custom.yaml"];
+    const INCLUDED_DIRECTORIES: &'static [&'static str] = &["sync/"];
     const EXCLUDED_DIRECTORIES: &'static [&'static str] = &[".git/", ".qiwo-sync/", "build/"];
     // `.bin` already covers `.table.bin` and `.reverse.bin`; `.qiwo-part` is the
     // staging suffix left behind by an interrupted download.
@@ -77,25 +90,32 @@ mod tests {
         assert!(fs.should_sync("weasel.custom.yaml"));
     }
 
+    /// Distributed data ships with the installer into Rime's shared data
+    /// directory; syncing it would push ~44 MB per device to the user's WebDAV
+    /// server and duplicate what every device already has.
     #[test]
-    fn test_should_sync_schema_dict() {
+    fn test_exclude_distributed_schema_and_dictionary_data() {
         let fs = FileSelector;
-        assert!(fs.should_sync("rime_frost.schema.yaml"));
-        assert!(fs.should_sync("rime_frost.dict.yaml"));
+        assert!(!fs.should_sync("rime_frost.schema.yaml"));
+        assert!(!fs.should_sync("rime_frost.dict.yaml"));
+        assert!(!fs.should_sync("cn_dicts/base.dict.yaml"));
+        assert!(!fs.should_sync("cn_dicts_cell/composite.dict.yaml"));
+        assert!(!fs.should_sync("opencc/s2t.json"));
+        assert!(!fs.should_sync("opencc/emoji.json"));
+        assert!(!fs.should_sync("lua/corrector.lua"));
+        assert!(!fs.should_sync("symbols.yaml"));
+        assert!(!fs.should_sync("essay.txt"));
+        assert!(!fs.should_sync("default.yaml"));
     }
 
+    /// Rime's supported customisation entry point still syncs, so a user who
+    /// patches a schema or a dictionary through `*.custom.yaml` keeps it.
     #[test]
     fn test_should_sync_exact_files() {
         let fs = FileSelector;
         assert!(fs.should_sync("custom_phrase.txt"));
-        assert!(fs.should_sync("symbols.yaml"));
-    }
-
-    #[test]
-    fn test_should_sync_directories() {
-        let fs = FileSelector;
-        assert!(fs.should_sync("opencc/s2t.json"));
-        assert!(fs.should_sync("lua/selector.lua"));
+        assert!(fs.should_sync("rime_frost.custom.yaml"));
+        assert!(fs.should_sync("symbols.custom.yaml"));
     }
 
     #[test]

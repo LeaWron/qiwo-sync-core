@@ -3,7 +3,6 @@ use std::path::Path;
 use anyhow::Result;
 use tokio::fs;
 
-use crate::file_selector::FileSelector;
 use crate::types::{SyncMode, SyncRequest, SyncSummary};
 
 const DEFAULT_CUSTOM_YAML: &str = "default.custom.yaml";
@@ -40,16 +39,29 @@ const SCHEMA_PATCH_ENTRIES: &[(&str, &str)] = &[(
 pub struct FrostInitializer;
 
 impl FrostInitializer {
+    /// Seeds the *personal* layer of a Rime user directory.
+    ///
+    /// This used to copy the whole of rime-frost — schemas, `cn_dicts/`,
+    /// `opencc/`, `lua/`, and even the 103 MB `others/` folder of
+    /// dictionary-making raw material — into the user directory, because the
+    /// installer staged the data one level too deep (`<shared>/rime-frost/`)
+    /// for librime to find it. Now the installer flattens it into the shared
+    /// data directory, so the only things that belong in the user directory are
+    /// the ones the user owns: the schema list, the Qiwo switcher patches, and
+    /// `installation.yaml` (written by [`crate::installation`]).
+    ///
+    /// `shared_data_dir` is read, never copied from — it is only used to
+    /// enumerate which `rime_frost*` schemas are installed.
     pub async fn initialize(request: &SyncRequest) -> Result<SyncSummary> {
-        let frost_dir = request
+        let shared_data_dir = request
             .frost_dir
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("FrostDir is required for init-frost."))?;
 
-        if !frost_dir.exists() {
+        if !shared_data_dir.exists() {
             anyhow::bail!(
-                "rime-frost directory does not exist: {}",
-                frost_dir.display()
+                "shared data directory does not exist: {}",
+                shared_data_dir.display()
             );
         }
 
@@ -58,104 +70,30 @@ impl FrostInitializer {
         }
 
         let mut messages = Vec::new();
-        let mut copied = 0u32;
-        let mut skipped_files = 0u32;
-
-        let schema = request.rime_user_dir.join(FROST_SCHEMA_FILE);
-        if !schema.exists() {
-            copied = copy_frost_resources(
-                frost_dir,
-                &request.rime_user_dir,
-                request.dry_run,
-                &mut skipped_files,
-            )?;
-        } else {
-            messages.push("rime-frost schema already exists; resource copy skipped.".into());
-        }
 
         ensure_default_custom_yaml(&request.rime_user_dir, request.dry_run).await?;
         let schema_custom_files =
-            ensure_schema_custom_yamls(frost_dir, &request.rime_user_dir, request.dry_run).await?;
+            ensure_schema_custom_yamls(shared_data_dir, &request.rime_user_dir, request.dry_run)
+                .await?;
         if schema_custom_files > 0 {
             messages.push(format!(
                 "Qiwo auto spacing switcher patches ensured for {schema_custom_files} schema(s)."
             ));
         }
 
+        if !shared_data_dir.join(FROST_SCHEMA_FILE).exists() {
+            messages.push(format!(
+                "warning: {FROST_SCHEMA_FILE} not found in {} — the installer may not have staged \
+                 the shared data correctly.",
+                shared_data_dir.display()
+            ));
+        }
+
         let mut summary =
             SyncSummary::new(SyncMode::InitFrost, request.frontend, &request.device_id);
-        summary.downloaded = copied;
-        summary.skipped = skipped_files;
         summary.messages = messages;
         Ok(summary)
     }
-}
-
-fn copy_frost_resources(
-    frost_dir: &Path,
-    rime_user_dir: &Path,
-    dry_run: bool,
-    skipped: &mut u32,
-) -> Result<u32> {
-    let selector = FileSelector;
-    let mut copied = 0u32;
-
-    for entry in walkdir::WalkDir::new(frost_dir)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-    {
-        let source = entry.path();
-        let relative = source
-            .strip_prefix(frost_dir)
-            .unwrap_or(source)
-            .to_string_lossy()
-            .replace('\\', "/");
-
-        // Skip .git/
-        if relative.starts_with(".git/") {
-            continue;
-        }
-
-        if !is_frost_resource(&relative, &selector) {
-            continue;
-        }
-
-        let target = rime_user_dir.join(&relative);
-
-        if target.exists() {
-            *skipped += 1;
-            continue;
-        }
-
-        if !dry_run {
-            if let Some(parent) = target.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            std::fs::copy(source, &target)?;
-        }
-
-        copied += 1;
-    }
-
-    Ok(copied)
-}
-
-fn is_frost_resource(relative_path: &str, selector: &FileSelector) -> bool {
-    if selector.should_sync(relative_path) {
-        return true;
-    }
-
-    let lower = relative_path
-        .replace('\\', "/")
-        .trim_start_matches('/')
-        .to_lowercase();
-
-    lower.ends_with(".yaml")
-        || lower == "installation.yaml"
-        || lower.starts_with("cn_dicts/")
-        || lower.starts_with("en_dicts/")
-        || lower.starts_with("others/")
 }
 
 async fn ensure_default_custom_yaml(rime_user_dir: &Path, dry_run: bool) -> Result<()> {
@@ -171,13 +109,13 @@ async fn ensure_default_custom_yaml(rime_user_dir: &Path, dry_run: bool) -> Resu
 }
 
 async fn ensure_schema_custom_yamls(
-    frost_dir: &Path,
+    shared_data_dir: &Path,
     rime_user_dir: &Path,
     dry_run: bool,
 ) -> Result<u32> {
     let mut ensured = 0u32;
 
-    for entry in walkdir::WalkDir::new(frost_dir)
+    for entry in walkdir::WalkDir::new(shared_data_dir)
         .max_depth(1)
         .into_iter()
         .filter_map(|e| e.ok())
@@ -298,6 +236,70 @@ mod tests {
 
     use super::*;
     use crate::types::{Frontend, SyncMode, SyncRequest};
+
+    /// init-frost seeds the personal layer only. Everything the installer put in
+    /// the shared data directory must stay there — copying it into the user
+    /// directory is what used to duplicate 153 MB per machine.
+    #[test]
+    fn init_frost_does_not_copy_shared_data_into_the_user_directory() {
+        let rt = runtime();
+        let shared_dir = temp_dir("shared-nocopy");
+        let user_dir = temp_dir("user-nocopy");
+        std_fs::create_dir_all(shared_dir.join("cn_dicts")).unwrap();
+        std_fs::create_dir_all(shared_dir.join("opencc")).unwrap();
+        std_fs::create_dir_all(shared_dir.join("lua")).unwrap();
+        std_fs::write(shared_dir.join("rime_frost.schema.yaml"), "schema\n").unwrap();
+        std_fs::write(shared_dir.join("rime_frost.dict.yaml"), "dict\n").unwrap();
+        std_fs::write(shared_dir.join("cn_dicts/base.dict.yaml"), "base\n").unwrap();
+        std_fs::write(shared_dir.join("opencc/emoji.json"), "{}\n").unwrap();
+        std_fs::write(shared_dir.join("lua/corrector.lua"), "-- lua\n").unwrap();
+        std_fs::write(shared_dir.join("essay.txt"), "essay\n").unwrap();
+
+        let request = SyncRequest {
+            frontend: Frontend::IbusRime,
+            rime_user_dir: user_dir.clone(),
+            remote_url: None,
+            username: None,
+            password: None,
+            device_id: "test".into(),
+            mode: SyncMode::InitFrost,
+            frost_dir: Some(shared_dir.clone()),
+            dry_run: false,
+        };
+
+        rt.block_on(FrostInitializer::initialize(&request)).unwrap();
+
+        for copied in [
+            "rime_frost.schema.yaml",
+            "rime_frost.dict.yaml",
+            "cn_dicts",
+            "opencc",
+            "lua",
+            "essay.txt",
+        ] {
+            assert!(
+                !user_dir.join(copied).exists(),
+                "{copied} must not be copied into the user directory"
+            );
+        }
+
+        // What it *does* seed: the personal customisation layer.
+        assert!(user_dir.join("default.custom.yaml").exists());
+        assert!(user_dir.join("rime_frost.custom.yaml").exists());
+
+        let seeded: Vec<String> = std_fs::read_dir(&user_dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            seeded.len(),
+            2,
+            "user directory should hold only the seeded custom files, got {seeded:?}"
+        );
+
+        let _ = std_fs::remove_dir_all(shared_dir);
+        let _ = std_fs::remove_dir_all(user_dir);
+    }
 
     // Current-thread on purpose: see the note in `webdav_client`'s tests.
     fn runtime() -> tokio::runtime::Runtime {

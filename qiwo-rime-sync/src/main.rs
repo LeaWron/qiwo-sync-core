@@ -20,7 +20,7 @@ enum Command {
     Push(SyncArgs),
     /// Pull remote files to local
     Pull(SyncArgs),
-    /// Initialize/update rime-frost schema
+    /// Seed the personal layer of a Rime user directory (schema list + Qiwo patches)
     InitFrost(InitFrostArgs),
     /// Sync only user dictionary (sync/ directory)
     SyncUserDict(SyncArgs),
@@ -54,6 +54,9 @@ struct InitFrostArgs {
     frontend: String,
     #[arg(long)]
     rime_user_dir: PathBuf,
+    /// Rime's shared data directory, where the installer staged rime-frost.
+    /// Read only — used to enumerate the installed `rime_frost*` schemas.
+    /// Nothing is copied out of it.
     #[arg(long)]
     frost_dir: PathBuf,
     #[arg(long)]

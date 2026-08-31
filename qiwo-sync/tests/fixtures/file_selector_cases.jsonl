@@ -1,0 +1,45 @@
+{"path":"default.custom.yaml","sync":true,"why":"个人层：Rime 支持的定制入口"}
+{"path":"rime_frost.custom.yaml","sync":true,"why":"个人层：方案补丁"}
+{"path":"symbols.custom.yaml","sync":true,"why":"个人层：符号表补丁"}
+{"path":"weasel.custom.yaml","sync":true,"why":"个人层：前端配置补丁"}
+{"path":"custom_phrase.txt","sync":true,"why":"个人层：自定义短语"}
+{"path":"sync/windows-main/rime_frost.userdb.txt","sync":true,"why":"个人层：sync_user_data 导出的用户词典快照"}
+{"path":"sync/android/melt_eng.userdb.txt","sync":true,"why":"个人层：另一设备的快照，需要跨端流转"}
+{"path":"rime_frost.schema.yaml","sync":false,"why":"分发层：随安装包进共享数据目录"}
+{"path":"rime_frost.dict.yaml","sync":false,"why":"分发层：主词典"}
+{"path":"rime_frost_double_pinyin.schema.yaml","sync":false,"why":"分发层"}
+{"path":"cn_dicts/base.dict.yaml","sync":false,"why":"分发层：主词库 31MB"}
+{"path":"cn_dicts/others.dict.yaml","sync":false,"why":"分发层：名字带 others 但是运行时词典"}
+{"path":"cn_dicts_cell/composite.dict.yaml","sync":false,"why":"分发层：细胞词库 45MB"}
+{"path":"cn_dicts_common/jian.dict.yaml","sync":false,"why":"分发层"}
+{"path":"cn_dicts_wb/chars.dict.yaml","sync":false,"why":"分发层"}
+{"path":"en_dicts/en.dict.yaml","sync":false,"why":"分发层"}
+{"path":"opencc/s2t.json","sync":false,"why":"分发层：简繁转换 6.6MB"}
+{"path":"opencc/emoji.json","sync":false,"why":"分发层"}
+{"path":"opencc/others.txt","sync":false,"why":"分发层：名字带 others 但被 emoji.json 引用"}
+{"path":"lua/corrector.lua","sync":false,"why":"分发层"}
+{"path":"lua/aux_code/moqi_aux_code.txt","sync":false,"why":"分发层"}
+{"path":"symbols.yaml","sync":false,"why":"分发层：上游原始符号表，定制走 symbols.custom.yaml"}
+{"path":"default.yaml","sync":false,"why":"分发层：上游默认配置，定制走 default.custom.yaml"}
+{"path":"essay.txt","sync":false,"why":"分发层：语言模型语料"}
+{"path":"zh-moqi.gram","sync":false,"why":"分发层：语法模型"}
+{"path":"punctuation.yaml","sync":false,"why":"分发层"}
+{"path":"build/rime_frost.schema.yaml","sync":false,"why":"构建产物"}
+{"path":"build/rime_frost.table.bin","sync":false,"why":"构建产物"}
+{"path":".qiwo-sync/manifest.json","sync":false,"why":"同步器自身状态"}
+{"path":".qiwo-sync/backups/20260831120000/default.custom.yaml","sync":false,"why":"冲突备份"}
+{"path":".git/config","sync":false,"why":"版本控制元数据"}
+{"path":"rime_frost.table.bin","sync":false,"why":"二进制词典"}
+{"path":"rime_frost.reverse.bin","sync":false,"why":"二进制反查表"}
+{"path":"rime_frost.userdb/0001.sqlite3","sync":false,"why":"LevelDB 用户词典，走 sync/ 快照而非直传"}
+{"path":"sync/android/rime_frost.userdb/CURRENT","sync":false,"why":"userdb 目录段即使在 sync/ 下也排除"}
+{"path":".default.custom.yaml.qiwo-part","sync":false,"why":"下载中断留下的暂存文件"}
+{"path":"sync/android/.dict.txt.qiwo-part","sync":false,"why":"暂存文件"}
+{"path":"Default.Custom.Yaml","sync":true,"why":"扩展名匹配不区分大小写"}
+{"path":"CUSTOM_PHRASE.TXT","sync":true,"why":"精确文件名匹配不区分大小写"}
+{"path":"\\default.custom.yaml","sync":true,"why":"反斜杠分隔符需归一化"}
+{"path":"/default.custom.yaml","sync":true,"why":"前导斜杠需去除"}
+{"path":"sync\\android\\dict.txt","sync":true,"why":"反斜杠路径下的 sync/ 目录匹配"}
+{"path":"user.yaml","sync":false,"why":"设备本地状态，不同步"}
+{"path":"installation.yaml","sync":false,"why":"设备标识，不同步"}
+{"path":"README.md","sync":false,"why":"无关文件"}

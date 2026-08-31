@@ -75,23 +75,35 @@ directory are migrated into `sync/<new-id>/`.
 
 ## Synced Files
 
+Only the **personal** layer syncs. Schemas, dictionaries, `opencc/` and `lua/`
+ship with the installer into Rime's *shared* data directory, are identical on
+every device, and are therefore never uploaded — syncing them would push ~44 MB
+of redistributable data per device to the user's own WebDAV server.
+
 Included:
 
-- `*.custom.yaml`
-- `*.schema.yaml`
-- `*.dict.yaml`
+- `*.custom.yaml` — Rime's supported customisation entry point
 - `custom_phrase.txt`
-- `symbols.yaml`
-- `opencc/**`
-- `lua/**`
-- `sync/**`
+- `sync/**` — the user dictionary snapshots written by `sync_user_data()`
 
 Excluded:
 
-- `build/**`
-- `*.bin`
-- `*.table.bin`
-- `*.reverse.bin`
-- `*.userdb/**`
-- `.git/**`
-- `.qiwo-sync/**`
+- everything distributed with the installer: `*.schema.yaml`, `*.dict.yaml`,
+  `cn_dicts*/**`, `en_dicts/**`, `opencc/**`, `lua/**`, `symbols.yaml`,
+  `default.yaml`, `essay.txt`, `*.gram`
+- `build/**`, `*.bin`, `*.userdb/**`
+- `.git/**`, `.qiwo-sync/**`
+- `*.qiwo-part` — staging files from an interrupted download
+
+> The Android frontend reimplements this list in Kotlin
+> (`qiwo/sync/FileSelector.kt`). The two must be changed together, or one end
+> uploads files the other refuses.
+
+## init-frost
+
+`init-frost` seeds the personal layer of a Rime user directory: the schema
+list, the Qiwo auto-spacing switcher patches, and `installation.yaml`.
+
+It does **not** copy schemas or dictionaries. `--frost-dir` points at Rime's
+shared data directory and is read only, to enumerate which `rime_frost*`
+schemas the installer staged. Staging the data itself is the installer's job.
