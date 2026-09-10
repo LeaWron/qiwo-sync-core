@@ -104,9 +104,22 @@ Excluded:
 
 ## init-frost
 
-`init-frost` seeds the personal layer of a Rime user directory: the schema
-list, the Qiwo auto-spacing switcher patches, and `installation.yaml`.
+`init-frost` runs at install time, after the installer has staged the shared
+data directory (`--frost-dir`). It does two things:
 
-It does **not** copy schemas or dictionaries. `--frost-dir` points at Rime's
-shared data directory and is read only, to enumerate which `rime_frost*`
-schemas the installer staged. Staging the data itself is the installer's job.
+1. Checks that the shared data directory holds what the bundled schemas need
+   (`default.yaml`, `rime_frost.schema.yaml`, `cn_dicts/`, `opencc/`, `lua/`, …)
+   and reports anything missing.
+2. Moves stale copies of distributed files out of the user directory. Older
+   versions copied the whole distribution tree (schemas, dictionaries, lua,
+   opencc — about 150 MB) into the user directory; Rime resolves the user
+   directory first, so those copies shadow the shared data forever and an
+   upgraded machine keeps deploying old schemas. A file counts as a stale copy
+   when the distribution ships a file at the same relative path. It is moved,
+   never deleted, into `<user dir>/qiwo-shadowed-backup/<timestamp>/` together
+   with a `MOVED.txt` manifest, so it can be put back by hand.
+
+User-owned files are never touched, even when the distribution ships a file of
+the same name: `custom_phrase.txt` (rime-frost ships a sample), `*.custom.yaml`,
+`installation.yaml`, `user.yaml`, `sync/`, `build/` and `*.userdb`. It never
+writes to a user config file. `--dry-run` only reports what would move.

@@ -20,7 +20,7 @@ enum Command {
     Push(SyncArgs),
     /// Pull remote files to local
     Pull(SyncArgs),
-    /// Seed the personal layer of a Rime user directory (schema list + Qiwo patches)
+    /// Check the shared data directory and move stale distribution copies out of the user directory
     InitFrost(InitFrostArgs),
     /// Sync only user dictionary (sync/ directory)
     SyncUserDict(SyncArgs),
@@ -57,7 +57,8 @@ struct InitFrostArgs {
     #[arg(long)]
     rime_user_dir: PathBuf,
     /// Rime's shared data directory, where the installer staged rime-frost.
-    /// Read only — used to enumerate the installed `rime_frost*` schemas.
+    /// Read only: checked for completeness, and its file list is what tells a
+    /// stale copy in the user directory apart from the user's own files.
     /// Nothing is copied out of it.
     #[arg(long)]
     frost_dir: PathBuf,
