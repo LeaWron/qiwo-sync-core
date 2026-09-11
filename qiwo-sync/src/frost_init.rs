@@ -71,6 +71,29 @@ impl FrostInitializer {
     /// [`SHADOWED_BACKUP_DIR`]. User-owned files are left alone even when the
     /// distribution ships a file of the same name.
     pub async fn initialize(request: &SyncRequest) -> Result<SyncSummary> {
+        Self::initialize_with_trace(request, &default_trace_path()).await
+    }
+
+    /// Like [`initialize`](Self::initialize), but the one-line trace goes to
+    /// `trace_path`. The trace exists because the frontends' own logging is not
+    /// reliable: weasel compiles its `LOG` macros to nothing in release builds,
+    /// so "did init-frost move anything on this machine?" has to be answerable
+    /// from a file this tool writes itself. It is best effort and never fails
+    /// the run.
+    pub async fn initialize_with_trace(
+        request: &SyncRequest,
+        trace_path: &Path,
+    ) -> Result<SyncSummary> {
+        let outcome = Self::run(request).await;
+        let line = match &outcome {
+            Ok(summary) => summary.messages.join(" | "),
+            Err(error) => format!("error: {error:#}"),
+        };
+        append_trace(trace_path, request, &line);
+        outcome
+    }
+
+    async fn run(request: &SyncRequest) -> Result<SyncSummary> {
         let shared_data_dir = request
             .frost_dir
             .as_ref()
@@ -136,6 +159,37 @@ impl FrostInitializer {
         ));
 
         Ok(summary)
+    }
+}
+
+/// Where the trace lines go: the system temp directory, next to librime's own
+/// `rime.*` logs on every platform (`%TEMP%` on Windows).
+pub fn default_trace_path() -> PathBuf {
+    std::env::temp_dir().join("qiwo-init-frost.log")
+}
+
+/// Appends one line per run. Failures are ignored on purpose: a trace must never
+/// turn a successful installation into a failed one.
+fn append_trace(trace_path: &Path, request: &SyncRequest, line: &str) {
+    use std::io::Write;
+    let stamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+    let shared = request
+        .frost_dir
+        .as_deref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
+    let record = format!(
+        "{stamp} device={} frontend={} shared={shared} user={} :: {line}\n",
+        request.device_id,
+        request.frontend.as_str(),
+        request.rime_user_dir.display()
+    );
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(trace_path)
+    {
+        let _ = file.write_all(record.as_bytes());
     }
 }
 
@@ -357,9 +411,18 @@ mod tests {
         }
     }
 
+    /// A trace path in a directory that does not exist: the trace is best effort,
+    /// so tests neither depend on it nor litter the real temp directory.
+    fn no_trace() -> PathBuf {
+        temp_dir("no-trace").join("qiwo-init-frost.log")
+    }
+
     fn run(shared: &Path, user: &Path) -> SyncSummary {
         runtime()
-            .block_on(FrostInitializer::initialize(&request(shared, user, false)))
+            .block_on(FrostInitializer::initialize_with_trace(
+                &request(shared, user, false),
+                &no_trace(),
+            ))
             .unwrap()
     }
 
@@ -444,9 +507,10 @@ mod tests {
         std_fs::create_dir_all(&user).unwrap();
 
         let error = runtime()
-            .block_on(FrostInitializer::initialize(&request(
-                &shared, &user, false,
-            )))
+            .block_on(FrostInitializer::initialize_with_trace(
+                &request(&shared, &user, false),
+                &no_trace(),
+            ))
             .expect_err("a missing shared data directory is fatal");
         assert!(format!("{error:#}").contains("does not exist"));
 
@@ -571,7 +635,10 @@ mod tests {
         stage_shadowed_user_dir(&shared, &user);
 
         let summary = runtime()
-            .block_on(FrostInitializer::initialize(&request(&shared, &user, true)))
+            .block_on(FrostInitializer::initialize_with_trace(
+                &request(&shared, &user, true),
+                &no_trace(),
+            ))
             .unwrap();
 
         let message = summary.messages.join("\n");
@@ -605,5 +672,39 @@ mod tests {
         assert!(backup_dirs(&shared).is_empty());
 
         let _ = std_fs::remove_dir_all(shared);
+    }
+
+    /// The frontends' own logging cannot be relied on (weasel compiles `LOG` to
+    /// nothing in release builds), so every run leaves one line in the trace —
+    /// and never inside the user directory.
+    #[test]
+    fn init_frost_appends_one_trace_line_per_run() {
+        let shared = temp_dir("shared-trace");
+        let user = temp_dir("user-trace");
+        stage_shadowed_user_dir(&shared, &user);
+        let trace = temp_dir("trace").join("qiwo-init-frost.log");
+        std_fs::create_dir_all(trace.parent().unwrap()).unwrap();
+
+        for _ in 0..2 {
+            runtime()
+                .block_on(FrostInitializer::initialize_with_trace(
+                    &request(&shared, &user, false),
+                    &trace,
+                ))
+                .unwrap();
+        }
+
+        let text = read(&trace);
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 2, "{text}");
+        assert!(lines[0].contains("device=test"), "{text}");
+        assert!(lines[0].contains("Moved 4 stale copies"), "{text}");
+        assert!(lines[1].contains("looks complete"), "{text}");
+        assert!(!lines[1].contains("Moved"), "{text}");
+        assert!(!user.join("qiwo-init-frost.log").exists());
+
+        let _ = std_fs::remove_dir_all(shared);
+        let _ = std_fs::remove_dir_all(user);
+        let _ = std_fs::remove_dir_all(trace.parent().unwrap());
     }
 }

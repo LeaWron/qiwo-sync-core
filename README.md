@@ -123,3 +123,9 @@ User-owned files are never touched, even when the distribution ships a file of
 the same name: `custom_phrase.txt` (rime-frost ships a sample), `*.custom.yaml`,
 `installation.yaml`, `user.yaml`, `sync/`, `build/` and `*.userdb`. It never
 writes to a user config file. `--dry-run` only reports what would move.
+
+Every run appends one line to `<system temp dir>/qiwo-init-frost.log` (`%TEMP%` on
+Windows, next to librime's own `rime.*` logs): what it checked, what it moved, or
+the error. The frontends' own logging cannot be relied on for this — weasel compiles
+its `LOG` macros to nothing in release builds — and the answer to "why did my schema
+not update" has to survive after the fact.
