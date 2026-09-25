@@ -22,6 +22,7 @@ pub enum Frontend {
     Weasel,
     Squirrel,
     IbusRime,
+    Fcitx5Rime,
     Trime,
     /// The Android frontend.
     ///
@@ -49,6 +50,7 @@ impl Frontend {
             Frontend::Weasel => "Weasel",
             Frontend::Squirrel => "Squirrel",
             Frontend::IbusRime => "IbusRime",
+            Frontend::Fcitx5Rime => "fcitx5-rime",
             Frontend::Trime => "Trime",
             Frontend::QiwoIme => "qiwo-android",
         }
@@ -146,6 +148,17 @@ impl SyncManifest {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fcitx_identity_round_trips_and_is_distinct_from_ibus() {
+        let frontend = Frontend::Fcitx5Rime;
+        assert_eq!(serde_json::to_string(&frontend).unwrap(), "\"fcitx5-rime\"");
+        assert_eq!(
+            serde_json::from_str::<Frontend>("\"fcitx5-rime\"").unwrap(),
+            frontend
+        );
+        assert_ne!(frontend.as_str(), Frontend::IbusRime.as_str());
+    }
 
     #[test]
     fn frontend_deserializes_qiwo_android_identity() {

@@ -1,6 +1,9 @@
+pub mod cleanup;
 pub mod file_selector;
 pub mod frost_init;
 pub mod installation;
+pub mod inventory;
+pub mod lifecycle;
 mod paths;
 pub mod sync_engine;
 pub mod types;

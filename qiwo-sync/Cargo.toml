@@ -9,11 +9,13 @@ description = "Qiwo sync core library — WebDAV-based Rime configuration and us
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+quick-xml = "0.41"
 sha2 = "0.10"
-tokio = { version = "1", features = ["fs", "io-util", "rt", "sync"] }
+tokio = { version = "1", features = ["fs", "io-util", "rt", "sync", "time"] }
 chrono = { version = "0.4", features = ["serde"] }
 anyhow = "1"
 walkdir = "2"
+getrandom = "0.3"
 # 流式上传（ReaderStream）与有界并发传输
 tokio-util = { version = "0.7", default-features = false, features = ["io"] }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }

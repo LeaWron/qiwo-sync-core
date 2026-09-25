@@ -175,6 +175,14 @@ impl SyncEngine {
             .as_deref()
             .ok_or_else(|| anyhow::anyhow!("RemoteUrl is required for WebDAV sync."))?;
 
+        if request.rime_user_dir.is_dir()
+            && crate::lifecycle::local::enrollment(&request.rime_user_dir)?.is_some()
+        {
+            anyhow::bail!(
+                "Managed sync requires a compatible native frontend export/import session; legacy fallback is disabled"
+            );
+        }
+
         if !request.dry_run {
             fs::create_dir_all(&request.rime_user_dir).await?;
             InstallationHelper::ensure(&request.rime_user_dir, &request.device_id).await?;
@@ -189,6 +197,7 @@ impl SyncEngine {
 
         if !request.dry_run {
             webdav.ensure_root().await?;
+            crate::cleanup::prune_foreign_cache(&request).await?;
         }
 
         match request.mode {
@@ -204,11 +213,13 @@ impl SyncEngine {
 
     async fn push(&self, request: &SyncRequest, webdav: &WebDavClient) -> Result<SyncSummary> {
         let local_files = scan_local_files(&request.rime_user_dir, &self.selector).await?;
+        let remote = read_remote_manifest(webdav).await?;
         let mut uploaded = 0u32;
         let mut messages = Vec::new();
 
         let plan: Vec<TransferAction> = local_files
             .keys()
+            .filter(|path| !crate::cleanup::foreign(path, &request.device_id))
             .collect::<BTreeSet<_>>()
             .into_iter()
             .map(|path| TransferAction::Upload(path.clone()))
@@ -219,10 +230,11 @@ impl SyncEngine {
             execute_plan(&request.rime_user_dir, webdav, &plan).await?;
         }
 
-        // Push is "make the remote match this device", so both manifests become
-        // the local view.
+        let remote_files =
+            crate::cleanup::published_files(&local_files, &remote.files, &request.device_id);
         let manifest = create_manifest(request, local_files);
-        write_manifests(request, webdav, &manifest, &manifest).await?;
+        let remote_manifest = create_manifest(request, remote_files);
+        write_manifests(request, webdav, &manifest, &remote_manifest).await?;
 
         messages.push(format!("Pushed {} file(s).", uploaded));
         let mut summary = SyncSummary::new(SyncMode::Push, request.frontend, &request.device_id);
@@ -346,6 +358,21 @@ impl SyncEngine {
         // the transfers themselves once `sync/` holds a snapshot set per device.
         let mut plan = Vec::new();
         for path in &all_paths {
+            if crate::cleanup::foreign(path, &request.device_id) {
+                if let Some(remote) = remote_manifest.files.get(*path)
+                    && self.selector.should_sync(path)
+                    && local_files
+                        .get(*path)
+                        .is_none_or(|local| local.sha256 != remote.sha256)
+                {
+                    plan.push(TransferAction::ResolveConflict((*path).clone()));
+                    downloaded += 1;
+                    conflicts += u32::from(local_files.contains_key(*path));
+                } else {
+                    skipped += 1;
+                }
+                continue;
+            }
             match decide(
                 path,
                 &self.selector,
@@ -393,9 +420,14 @@ impl SyncEngine {
             request,
             merge_scoped(&previous_manifest.files, &final_files, scope),
         );
+        let published = crate::cleanup::published_files(
+            &final_files,
+            &remote_manifest.files,
+            &request.device_id,
+        );
         let remote_update = create_manifest(
             request,
-            merge_scoped(&remote_manifest.files, &final_files, scope),
+            merge_scoped(&remote_manifest.files, &published, scope),
         );
         write_manifests(request, webdav, &local_update, &remote_update).await?;
 
