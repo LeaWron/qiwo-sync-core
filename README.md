@@ -97,10 +97,30 @@ Excluded:
 - `build/**`, `*.bin`, `*.userdb/**`
 - `.git/**`, `.qiwo-sync/**`
 - `*.qiwo-part` — staging files from an interrupted download
+- `user.yaml` and `installation.yaml`, including the copies Rime puts under
+  `sync/<id>/` — device preferences and identity stay local
+- `qiwo-corrector-debug.txt`, including exported copies — local debug output
 
 > The Android frontend reimplements this list in Kotlin
 > (`qiwo/sync/FileSelector.kt`). The two must be changed together, or one end
 > uploads files the other refuses.
+
+## fcitx5 frontend
+
+`--frontend fcitx5-rime` (alias `fcitx5`) is independent of `ibus-rime`.
+Frontends can invoke `sync-configured --frontend fcitx5-rime --rime-user-dir
+/absolute/rime --device-id <Rime-installation-id> --config /private/webdav.json`.
+The private JSON file contains `enabled`, `remoteUrl`, and optional `username`
+plus either `password` or `passwordEnv`. On Unix it must have no group/other
+permissions (normally 0600). `--check` validates without writes or network I/O.
+Exit code 3 means invalid settings; 4 means a network sync failure. Diagnostics
+for this adapter omit remote response bodies and secrets. Existing CLI modes
+are unchanged.
+
+This command only performs the network leg. The fcitx addon first exports Rime
+snapshots, runs this worker asynchronously, then merges snapshots and redeploys.
+It supplies Rime's existing installation ID so syncing cannot migrate a live
+engine to a different device ID mid-session.
 
 ## init-frost
 
@@ -129,3 +149,23 @@ Windows, next to librime's own `rime.*` logs): what it checked, what it moved, o
 the error. The frontends' own logging cannot be relied on for this — weasel compiles
 its `LOG` macros to nothing in release builds — and the answer to "why did my schema
 not update" has to survive after the fact.
+
+## Read-only content inventory
+
+`qiwo_sync::inventory::inspect` compares the remote manifest, actual WebDAV
+files and local metadata. It groups `sync/<id>/` snapshots (including empty
+device directories), reports byte totals, and identifies untracked remote files,
+missing tracked files and files excluded by this core's selector. Device activity
+is unknown: file modification times are not sync heartbeats.
+
+The inventory uses only GET and Depth: 1 PROPFIND, with bounded response sizes,
+traversal limits and timeouts. It never invokes the sync engine, creates local or
+remote state, changes identity, reads credentials into the report, or downloads
+file contents other than the manifest. Private `.qiwo-sync/` and `.git/` trees
+are not inventoried. Incomplete scans remain explicitly incomplete; a missing
+listing is never interpreted as an empty directory. Run `cargo test -p qiwo-sync
+--test inventory` for the loopback WebDAV contract tests.
+
+## Device residual cleanup
+
+The assistant now maintains the original DAV directory without managed-space migration. See [the current cleanup contract](docs/device-residual-cleanup.md). Only a snapshot owner uploads it; other devices remove backed-up foreign caches when the cloud copy is confirmed absent. The original device can return under the same ID.

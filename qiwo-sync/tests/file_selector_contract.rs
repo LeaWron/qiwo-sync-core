@@ -18,7 +18,7 @@ use qiwo_sync::file_selector::FileSelector;
 /// The same constant is asserted by `FileSelectorContractTest` in qiwo-android.
 /// Editing the cases on one side only makes the *other* repository's build fail
 /// on its next run, which is the point: the two copies must move together.
-const CASES_SHA256: &str = "bbaaa8a30b0a1d1d9844b8c3b29003ddbef0708c58203f2cfe45eaa7cf757da6";
+const CASES_SHA256: &str = "52249476ba41ed6bf2663ab8c6171d757ec66f2885786edc71642be7b50d74f3";
 
 fn sha256_lf(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};

@@ -13,6 +13,22 @@ use tokio::sync::Mutex;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const READ_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// URL policy for a private-settings frontend adapter. Credentials belong in
+/// separate fields, and query/fragment tokens must never land in error output.
+pub fn validate_private_settings_url(value: &str) -> Result<()> {
+    let url = reqwest::Url::parse(value)?;
+    anyhow::ensure!(
+        matches!(url.scheme(), "http" | "https")
+            && url.host_str().is_some()
+            && url.username().is_empty()
+            && url.password().is_none()
+            && url.query().is_none()
+            && url.fragment().is_none(),
+        "Invalid WebDAV URL"
+    );
+    Ok(())
+}
+
 fn propfind() -> Method {
     Method::from_bytes(b"PROPFIND").expect("PROPFIND is a valid method name")
 }

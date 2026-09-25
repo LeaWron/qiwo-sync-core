@@ -4,6 +4,8 @@ use clap::{Parser, Subcommand};
 use qiwo_sync::sync_engine::SyncEngine;
 use qiwo_sync::types::{Frontend, SyncMode, SyncRequest};
 
+mod configured;
+
 /// Qiwo Rime Sync — WebDAV-based Rime configuration and user dictionary sync.
 #[derive(Parser)]
 #[command(name = "qiwo-rime-sync", version)]
@@ -14,6 +16,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Sync using a private settings file (credentials never appear in argv).
+    SyncConfigured(configured::Args),
     /// Bidirectional sync with conflict detection
     Sync(SyncArgs),
     /// Push local files to remote
@@ -77,6 +81,7 @@ fn parse_frontend(value: &str) -> Result<Frontend, String> {
         "weasel" => Ok(Frontend::Weasel),
         "squirrel" => Ok(Frontend::Squirrel),
         "ibus-rime" | "ibus" => Ok(Frontend::IbusRime),
+        "fcitx5-rime" | "fcitx5" => Ok(Frontend::Fcitx5Rime),
         "trime" => Ok(Frontend::Trime),
         "qiwo-android" | "qiwo-yuyan" | "qiwoime" | "qiwo" | "qiwo-ime" => Ok(Frontend::QiwoIme),
         "yuyanime" | "yuyan" | "yuyan-ime" => Ok(Frontend::QiwoIme),
@@ -95,6 +100,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     let (mode, args, print_json) = match &cli.command {
+        Command::SyncConfigured(args) => {
+            std::process::exit(configured::run(args).await);
+        }
         Command::Sync(a) => (SyncMode::Sync, a, a.json),
         Command::Push(a) => (SyncMode::Push, a, a.json),
         Command::Pull(a) => (SyncMode::Pull, a, a.json),
@@ -178,6 +186,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_fcitx_frontend() {
+        assert_eq!(parse_frontend("fcitx5-rime").unwrap(), Frontend::Fcitx5Rime);
+        assert_eq!(parse_frontend("fcitx5").unwrap(), Frontend::Fcitx5Rime);
+    }
 
     #[test]
     fn parse_frontend_accepts_qiwo_android_identity() {

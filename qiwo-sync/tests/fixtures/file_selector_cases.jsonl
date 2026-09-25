@@ -43,3 +43,7 @@
 {"path":"user.yaml","sync":false,"why":"设备本地状态，不同步"}
 {"path":"installation.yaml","sync":false,"why":"设备标识，不同步"}
 {"path":"README.md","sync":false,"why":"无关文件"}
+{"path":"sync/device/user.yaml","sync":false,"why":"Rime 导出的设备状态副本仍不同步"}
+{"path":"sync/device/installation.yaml","sync":false,"why":"Rime 导出的设备状态副本仍不同步"}
+{"path":"sync\\device\\USER.YAML","sync":false,"why":"Rime 导出的设备状态副本仍不同步"}
+{"path":"sync/device/qiwo-corrector-debug.txt","sync":false,"why":"本地调试日志的导出副本不同步"}

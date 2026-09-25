@@ -12,7 +12,7 @@
 /// user's own to manage; `*.custom.yaml` is Rime's supported customisation
 /// entry point and does sync.
 ///
-/// **This list is mirrored in `FileSelector.kt` in qiwo-android. Change both.**
+/// Frozen v2 personal-layer selection, shared by migration and all v2 clients.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct FileSelector;
 
@@ -20,7 +20,8 @@ impl FileSelector {
     const INCLUDED_EXACT: &'static [&'static str] = &["custom_phrase.txt"];
     const INCLUDED_EXTENSIONS: &'static [&'static str] = &[".custom.yaml"];
     const INCLUDED_DIRECTORIES: &'static [&'static str] = &["sync/"];
-    const EXCLUDED_DIRECTORIES: &'static [&'static str] = &[".git/", ".qiwo-sync/", "build/"];
+    const EXCLUDED_DIRECTORIES: &'static [&'static str] =
+        &[".git/", ".qiwo-sync/", ".qiwo-managed-v2/", "build/"];
     // `.bin` already covers `.table.bin` and `.reverse.bin`; `.qiwo-part` is the
     // staging suffix left behind by an interrupted download.
     const EXCLUDED_EXTENSIONS: &'static [&'static str] = &[".bin", ".qiwo-part"];
@@ -31,7 +32,10 @@ impl FileSelector {
         &["user.yaml", "installation.yaml", "qiwo-corrector-debug.txt"];
 
     pub fn should_sync(&self, relative_path: &str) -> bool {
-        let path = crate::paths::normalize_relative(relative_path);
+        let path = relative_path
+            .replace('\\', "/")
+            .trim_start_matches('/')
+            .to_owned();
         let lower = path.to_lowercase();
         if Self::EXCLUDED_FILES.contains(&lower.rsplit('/').next().unwrap_or(&lower)) {
             return false;
@@ -89,7 +93,10 @@ impl FileSelector {
     /// is worth entering only when it lies on the path to an included
     /// directory, in either direction.
     pub fn should_descend(&self, relative_dir: &str) -> bool {
-        let dir = crate::paths::normalize_relative(relative_dir);
+        let dir = relative_dir
+            .replace('\\', "/")
+            .trim_start_matches('/')
+            .to_owned();
         if dir.is_empty() {
             return true;
         }
