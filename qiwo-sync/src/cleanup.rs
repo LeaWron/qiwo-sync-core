@@ -235,6 +235,12 @@ pub async fn preview(request: &SyncRequest, selection: Selection) -> Result<Plan
 pub async fn execute(request: &SyncRequest, plan: &Plan) -> Result<Report> {
     check_request(request)?;
     let _guard = crate::operation::Guard::acquire(&request.rime_user_dir)?;
+    if let Some(task) = crate::changes::native_state(&request.rime_user_dir)? {
+        ensure!(
+            matches!(task.phase.as_str(), "succeeded" | "failed" | "cancelled"),
+            "同步、词库合并或部署任务正在执行"
+        );
+    }
     let dav = Dav::new(request)?;
     ensure!(
         plan.id.len() == 64 && plan.id.bytes().all(|b| b.is_ascii_hexdigit()),

@@ -35,6 +35,8 @@ pub struct StateArgs {
     /// Exit 10 when there are no changes of this kind; stdout is always JSON.
     #[arg(long)]
     pub pending: Option<String>,
+    #[arg(long, conflicts_with = "pending")]
+    pub notify_deploy: bool,
 }
 #[derive(clap::Args)]
 pub struct ApplyArgs {
@@ -55,6 +57,11 @@ fn kind(value: &str) -> anyhow::Result<ApplyKind> {
     }
 }
 pub fn state(args: &StateArgs) -> anyhow::Result<i32> {
+    if args.notify_deploy {
+        let count = changes::claim_deploy_notification(&args.rime_user_dir)?;
+        println!("{}", serde_json::json!({"newFiles": count}));
+        return Ok(if count > 0 { 0 } else { 10 });
+    }
     let state = changes::state(&args.rime_user_dir)?;
     let empty = match args.pending.as_deref() {
         Some(value) => {

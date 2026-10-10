@@ -27,7 +27,7 @@ fn classification_does_not_confuse_base_dictionaries_with_learning_snapshots() {
     let cases = [
         ("sync/other/pinyin.userdb.txt", Purpose::LearningSnapshot),
         ("sync/current/pinyin.userdb.txt", Purpose::Unknown),
-        ("sync/other/base.dict.yaml", Purpose::Dictionary),
+        ("sync/other/base.dict.yaml", Purpose::SnapshotArchive),
         ("base.dict.yaml", Purpose::Dictionary),
         ("custom_phrase.txt", Purpose::Dictionary),
         ("rime.schema.yaml", Purpose::Schema),
@@ -118,6 +118,18 @@ fn cancellation_is_scoped_and_survives_later_phase_updates() {
     );
     changes::native_task(&root.0, Some(&task.id), Some("cancelled"), false).unwrap();
     assert!(changes::native_task(&root.0, Some(&task.id), None, true).is_err());
+}
+
+#[test]
+fn notifications_only_claim_new_deployment_changes_and_do_not_acknowledge_them() {
+    let root = Root::new();
+    root.put("default.custom.yaml", b"first");
+    assert_eq!(changes::claim_deploy_notification(&root.0).unwrap(), 1);
+    assert_eq!(changes::claim_deploy_notification(&root.0).unwrap(), 0);
+    assert_eq!(changes::state(&root.0).unwrap().pending_deploy.len(), 1);
+    root.put("default.custom.yaml", b"second");
+    assert_eq!(changes::claim_deploy_notification(&root.0).unwrap(), 1);
+    assert_eq!(changes::state(&root.0).unwrap().pending_deploy.len(), 2);
 }
 
 #[test]

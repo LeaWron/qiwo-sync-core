@@ -19,6 +19,7 @@ pub enum Purpose {
     Configuration,
     Schema,
     Dictionary,
+    SnapshotArchive,
     Internal,
     Unknown,
 }
@@ -37,6 +38,22 @@ pub fn classify(path: &str, actor: &str) -> Purpose {
     if parts.len() == 3 && parts[0] == "sync" && parts[1] != actor && name.ends_with(".userdb.txt")
     {
         return Purpose::LearningSnapshot;
+    }
+    // Rime also exports configuration copies under sync/<device>/. Replacing
+    // those cached backups does not replace the active schema/configuration;
+    // deploying them would do nothing. Keep them available for manual review.
+    if parts.len() >= 3
+        && parts[0] == "sync"
+        && (name.ends_with(".schema.yaml")
+            || name.ends_with(".dict.yaml")
+            || name.ends_with(".custom.yaml")
+            || name == "custom_phrase.txt"
+            || matches!(
+                name.as_str(),
+                "default.yaml" | "weasel.yaml" | "squirrel.yaml" | "ibus_rime.yaml" | "fcitx5.yaml"
+            ))
+    {
+        return Purpose::SnapshotArchive;
     }
     if name.ends_with(".schema.yaml") {
         return Purpose::Schema;
@@ -162,6 +179,8 @@ impl ApplyKind {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ApplyTask {
+    #[serde(default = "chrono::Utc::now")]
+    pub started_at_utc: chrono::DateTime<chrono::Utc>,
     pub id: String,
     pub kind: ApplyKind,
     pub changes: Vec<String>,
@@ -170,6 +189,8 @@ pub struct ApplyTask {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileResult {
+    #[serde(default)]
+    pub native_task_id: Option<String>,
     pub id: String,
     pub outcome: String,
 }
@@ -254,7 +275,7 @@ pub fn state(root: &Path) -> Result<PendingState> {
             Purpose::Configuration | Purpose::Schema | Purpose::Dictionary => {
                 result.pending_deploy.push(change)
             }
-            Purpose::Unknown => result.unknown.push(change),
+            Purpose::Unknown | Purpose::SnapshotArchive => result.unknown.push(change),
             Purpose::Internal => (),
         }
     }
@@ -266,6 +287,21 @@ pub fn state(root: &Path) -> Result<PendingState> {
             MAX_STATE,
         )?)?);
     }
+    if let Some(file) = &mut result.file_sync
+        && file.outcome == "running"
+        && let Some(parent) = &file.native_task_id
+    {
+        match &result.native_task {
+            Some(task)
+                if task.id == *parent && matches!(task.phase.as_str(), "failed" | "cancelled") =>
+            {
+                file.outcome.clone_from(&task.phase)
+            }
+            Some(task) if task.id != *parent => file.outcome = "interrupted".into(),
+            _ => (),
+        }
+    }
+    result.apply_tasks.sort_by_key(|t| t.started_at_utc);
     Ok(result)
 }
 
@@ -277,6 +313,7 @@ pub fn begin(root: &Path, kind: ApplyKind) -> Result<ApplyTask> {
         state.pending_deploy
     };
     let task = ApplyTask {
+        started_at_utc: chrono::Utc::now(),
         id: random_id()?,
         kind,
         changes: changes.into_iter().map(|c| c.id).collect(),
@@ -313,6 +350,9 @@ pub fn file_result(root: &Path, id: &str, outcome: &str) -> Result<()> {
         root,
         FILE_RESULT,
         &serde_json::to_vec(&FileResult {
+            native_task_id: std::env::var("QIWO_NATIVE_TASK_ID")
+                .ok()
+                .filter(|id| valid_id(id)),
             id: id.into(),
             outcome: outcome.into(),
         })?,
@@ -322,9 +362,35 @@ pub fn file_result(root: &Path, id: &str, outcome: &str) -> Result<()> {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NativeTask {
+    #[serde(default = "sync_kind")]
+    pub kind: String,
     pub id: String,
     pub phase: String,
     pub cancel_requested: bool,
+}
+fn sync_kind() -> String {
+    "sync".into()
+}
+
+pub fn claim_deploy_notification(root: &Path) -> Result<usize> {
+    let _guard = crate::operation::Guard::acquire(root)?;
+    let pending = state(root)?.pending_deploy;
+    let path = ".qiwo-sync/notified-deploy-changes.json";
+    let mut notified: BTreeSet<String> = if local::safe_path(root, path)?.exists() {
+        serde_json::from_slice(&local::read(root, path, MAX_STATE)?)?
+    } else {
+        BTreeSet::new()
+    };
+    let mut files = BTreeSet::new();
+    for change in pending {
+        if notified.insert(change.id) {
+            files.insert(change.path);
+        }
+    }
+    if !files.is_empty() {
+        local::atomic_write(root, path, &serde_json::to_vec(&notified)?)?;
+    }
+    Ok(files.len())
 }
 const NATIVE: &str = ".qiwo-sync/native-task.json";
 pub fn native_state(root: &Path) -> Result<Option<NativeTask>> {
@@ -360,6 +426,14 @@ pub fn native_task(
             task
         } else {
             NativeTask {
+                kind: if phase == Some("waiting-deploy") {
+                    "deploy"
+                } else if phase == Some("waiting-merge") {
+                    "merge"
+                } else {
+                    "sync"
+                }
+                .into(),
                 id: random_id()?,
                 phase: "waiting-export".into(),
                 cancel_requested: false,
