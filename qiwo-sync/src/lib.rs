@@ -4,6 +4,7 @@ pub mod frost_init;
 pub mod installation;
 pub mod inventory;
 pub mod lifecycle;
+pub mod operation;
 mod paths;
 pub mod sync_engine;
 pub mod types;

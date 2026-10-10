@@ -718,6 +718,7 @@ dependencies = [
 name = "qiwo-rime-sync"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "clap",
  "qiwo-sync",
  "serde_json",

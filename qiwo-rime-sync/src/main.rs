@@ -4,6 +4,7 @@ use clap::{Parser, Subcommand};
 use qiwo_sync::sync_engine::SyncEngine;
 use qiwo_sync::types::{Frontend, SyncMode, SyncRequest};
 
+mod cleanup_task;
 mod configured;
 
 /// Qiwo Rime Sync — WebDAV-based Rime configuration and user dictionary sync.
@@ -16,6 +17,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Execute a previewed residual cleanup under the native frontend's gate.
+    CleanupResiduals(cleanup_task::Args),
+    /// Query the management protocol without reading credentials or user data.
+    CleanupCapability,
     /// Sync using a private settings file (credentials never appear in argv).
     SyncConfigured(configured::Args),
     /// Bidirectional sync with conflict detection
@@ -100,6 +105,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     let (mode, args, print_json) = match &cli.command {
+        Command::CleanupCapability => {
+            println!("qiwo-cleanup-v1");
+            return Ok(());
+        }
+        Command::CleanupResiduals(args) => std::process::exit(cleanup_task::run(args).await),
         Command::SyncConfigured(args) => {
             std::process::exit(configured::run(args).await);
         }

@@ -166,6 +166,11 @@ impl SyncEngine {
     }
 
     pub async fn execute(&self, request: SyncRequest) -> Result<SyncSummary> {
+        let _guard = if request.dry_run {
+            None
+        } else {
+            Some(crate::operation::Guard::acquire(&request.rime_user_dir)?)
+        };
         if request.mode == SyncMode::InitFrost {
             return crate::frost_init::FrostInitializer::initialize(&request).await;
         }

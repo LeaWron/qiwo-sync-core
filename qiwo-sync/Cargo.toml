@@ -2,7 +2,7 @@
 name = "qiwo-sync"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.88"   # edition 2024 + let-chains
+rust-version = "1.89"   # edition 2024 + let-chains
 description = "Qiwo sync core library — WebDAV-based Rime configuration and user dictionary sync"
 
 [dependencies]

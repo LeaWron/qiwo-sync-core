@@ -234,6 +234,7 @@ pub async fn preview(request: &SyncRequest, selection: Selection) -> Result<Plan
 /// has begun mutations is never replayed: a new preview must inspect remaining files.
 pub async fn execute(request: &SyncRequest, plan: &Plan) -> Result<Report> {
     check_request(request)?;
+    let _guard = crate::operation::Guard::acquire(&request.rime_user_dir)?;
     let dav = Dav::new(request)?;
     ensure!(
         plan.id.len() == 64 && plan.id.bytes().all(|b| b.is_ascii_hexdigit()),

@@ -7,6 +7,30 @@ use tokio::fs;
 /// installation_id 使用设备标识，sync_dir 指向 "sync/"。
 pub struct InstallationHelper;
 
+/// Read the native identity without creating files, migrating snapshots or
+/// changing the installation. Management must never guess from the hostname.
+pub fn installed_device_id(root: &Path) -> Result<String> {
+    let bytes = crate::lifecycle::local::read(root, "installation.yaml", 65536)?;
+    let text = std::str::from_utf8(&bytes)?;
+    let values: Vec<_> = text
+        .lines()
+        .filter_map(|line| {
+            if line.trim_start().starts_with("installation_id:") {
+                parse_yaml_string_value(line.trim())
+            } else {
+                None
+            }
+        })
+        .collect();
+    anyhow::ensure!(values.len() == 1, "Cannot confirm native device identity");
+    let id = values.into_iter().next().unwrap();
+    anyhow::ensure!(
+        !id.is_empty() && id != "." && id != ".." && safe_device_id(&id) == id,
+        "Invalid native device identity"
+    );
+    Ok(id)
+}
+
 impl InstallationHelper {
     const SYNC_DIR: &'static str = "sync";
 
