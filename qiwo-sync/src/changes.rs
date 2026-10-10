@@ -508,6 +508,22 @@ pub fn native_task_owned(
             ensure!(task.id == id, "Native task changed");
             task
         } else {
+            if let Some(existing) = native_state(root)? {
+                let active = !matches!(
+                    existing.phase.as_str(),
+                    "succeeded" | "failed" | "cancelled"
+                );
+                let owner_alive = existing
+                    .owner_pid
+                    .zip(existing.owner_stamp.as_ref())
+                    .is_some_and(|(pid, stamp)| {
+                        crate::process_owner::stamp(pid).as_ref() == Some(stamp)
+                    });
+                ensure!(
+                    !active || !owner_alive,
+                    "Another native task is still running"
+                );
+            }
             let owner_pid = owner_pid.unwrap_or_else(std::process::id);
             let owner_stamp = crate::process_owner::stamp(owner_pid)
                 .ok_or_else(|| anyhow::anyhow!("Native task owner is not running"))?;

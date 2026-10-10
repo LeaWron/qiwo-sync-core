@@ -227,3 +227,16 @@ fn unacknowledged_native_work_survives_restart_and_intents_require_applied_bytes
     fs::write(root.0.join("default.custom.yaml"), b"not applied").unwrap();
     assert!(changes::state(&root.0).unwrap().pending_deploy.is_empty());
 }
+
+#[test]
+fn native_owner_reservation_cannot_be_replaced_by_another_task() {
+    let root = Root::new();
+    let task = changes::native_task(&root.0, None, Some("waiting-export"), false).unwrap();
+    assert!(changes::native_task(&root.0, None, Some("waiting-deploy"), false).is_err());
+    assert_eq!(
+        changes::state(&root.0).unwrap().native_task.unwrap().id,
+        task.id
+    );
+    changes::native_task(&root.0, Some(&task.id), Some("failed"), false).unwrap();
+    assert!(changes::native_task(&root.0, None, Some("waiting-merge"), false).is_ok());
+}
