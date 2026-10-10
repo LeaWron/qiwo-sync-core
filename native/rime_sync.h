@@ -4,6 +4,10 @@
 #ifndef QIWO_NATIVE_RIME_SYNC_H
 #define QIWO_NATIVE_RIME_SYNC_H
 #include <rime_api.h>
+// librime before the stdbool API flavors exposes the plain ABI only.
+#ifndef RIME_FLAVORED
+#define RIME_FLAVORED(name) name
+#endif
 #include <rime_levers_api.h>
 #include <stdio.h>
 #include <stdlib.h>
