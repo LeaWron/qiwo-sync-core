@@ -3,6 +3,8 @@
 
 static unsigned cleanups, imports, backups, installation, config_backups;
 static Bool backup_fail;
+static unsigned module_loads;
+static void load_modules(RimeTraits* traits) { assert(traits == 0); ++module_loads; }
 static RimeLeversApi levers;
 static RimeModule module;
 static void cleanup(void) { ++cleanups; }
@@ -25,7 +27,7 @@ static RimeModule* find(const char* name) { return !strcmp(name, "levers") ? &mo
 int main(void) {
   RimeApi api = {0}; RIME_STRUCT_INIT(RimeApi, api);
   RIME_STRUCT_INIT(RimeLeversApi, levers); RIME_STRUCT_INIT(RimeModule, module);
-  api.cleanup_all_sessions = cleanup;api.sync_user_data = sync_all;api.run_task = task;api.find_module = find;
+  api.deployer_initialize = load_modules;api.cleanup_all_sessions = cleanup;api.sync_user_data = sync_all;api.run_task = task;api.find_module = find;
   module.get_api = get_levers;
   levers.user_dict_iterator_init = iterator_init;levers.user_dict_iterator_destroy = iterator_destroy;
   levers.next_user_dict = next;levers.backup_user_dict = backup;
@@ -34,5 +36,8 @@ int main(void) {
   backup_fail = True;assert(!qiwo_rime_export_own_snapshots(&api));
   assert(imports == 0);
   module.get_api = 0;assert(!qiwo_rime_export_own_snapshots(&api));
+  module_loads = 0;
+  assert(qiwo_rime_start_snapshot_merge(&api));
+  assert(module_loads == 1 && imports == 1);
   return 0;
 }

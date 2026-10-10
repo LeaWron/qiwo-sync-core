@@ -44,6 +44,14 @@ static inline int qiwo_rime_has_pending_deployment(RIME_FLAVORED(RimeApi)* api, 
   return valid ? pending : True;
 }
 
+// Offline retries after a restart also need the deployer task registrations.
+// Loading modules is separate from starting a workspace deployment.
+static inline int qiwo_rime_start_snapshot_merge(RIME_FLAVORED(RimeApi)* api) {
+  if (!api || !RIME_API_AVAILABLE(api, sync_user_data)) return False;
+  if (RIME_API_AVAILABLE(api, deployer_initialize)) api->deployer_initialize(NULL);
+  return api->sync_user_data() != 0;
+}
+
 static inline int qiwo_rime_export_own_snapshots(RIME_FLAVORED(RimeApi)* api) {
   if (!api || !RIME_API_AVAILABLE(api, run_task) ||
       !RIME_API_AVAILABLE(api, cleanup_all_sessions) ||
