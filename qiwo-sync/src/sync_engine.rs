@@ -106,24 +106,33 @@ async fn execute_plan(
     webdav: &WebDavClient,
     plan: &[TransferAction],
 ) -> Result<()> {
-    use futures_util::stream::TryStreamExt;
-
-    futures_util::stream::iter(plan.iter().map(Ok::<_, anyhow::Error>))
-        .try_for_each_concurrent(TRANSFER_CONCURRENCY, |action| async move {
-            match action {
-                TransferAction::Upload(path) => {
-                    webdav.put_file(path, &rime_user_dir.join(path)).await
-                }
-                TransferAction::Download(path) => {
-                    webdav.download_file(path, &rime_user_dir.join(path)).await
-                }
-                TransferAction::ResolveConflict(path) => {
+    use futures_util::stream::StreamExt;
+    let outcomes = futures_util::stream::iter(plan.iter().map(|action| async move {
+        match action {
+            TransferAction::Upload(path) => webdav.put_file(path, &rime_user_dir.join(path)).await,
+            TransferAction::Download(path) | TransferAction::ResolveConflict(path) => {
+                let actor = crate::installation::installed_device_id(rime_user_dir)?;
+                let staging = crate::lifecycle::local::safe_path(
+                    rime_user_dir,
+                    &format!(".qiwo-sync/downloads/{}", crate::lifecycle::random_id()?),
+                )?;
+                if matches!(action, TransferAction::ResolveConflict(_)) {
                     backup_local_file(rime_user_dir, path).await?;
-                    webdav.download_file(path, &rime_user_dir.join(path)).await
                 }
+                webdav.download_file(path, &staging).await?;
+                // No await between the durable intent and local replacement.
+                crate::changes::apply(rime_user_dir, path, Some(&staging), &actor)?;
+                Ok(())
             }
-        })
-        .await
+        }
+    }))
+    .buffer_unordered(TRANSFER_CONCURRENCY)
+    .collect::<Vec<Result<()>>>()
+    .await;
+    for outcome in outcomes {
+        outcome?;
+    }
+    Ok(())
 }
 
 /// Returns `base` with its in-scope entries replaced by those from `updates`.
@@ -171,10 +180,59 @@ impl SyncEngine {
         } else {
             Some(crate::operation::Guard::acquire(&request.rime_user_dir)?)
         };
+        if !request.dry_run
+            && let Some(task) = crate::changes::native_state(&request.rime_user_dir)?
+        {
+            let active = !matches!(task.phase.as_str(), "succeeded" | "failed" | "cancelled");
+            anyhow::ensure!(
+                !active
+                    || (task.phase == "network"
+                        && std::env::var("QIWO_NATIVE_TASK_ID").ok().as_deref()
+                            == Some(task.id.as_str())),
+                "Native sync, merge or deployment is still active"
+            );
+        }
         if request.mode == SyncMode::InitFrost {
             return crate::frost_init::FrostInitializer::initialize(&request).await;
         }
 
+        if request.dry_run {
+            return self.execute_files(&request).await;
+        }
+        fs::create_dir_all(&request.rime_user_dir).await?;
+        let run_id = crate::lifecycle::random_id()?;
+        let before = crate::changes::state(&request.rime_user_dir)?;
+        let existing: BTreeSet<_> = before
+            .pending_merge
+            .into_iter()
+            .chain(before.pending_deploy)
+            .chain(before.unknown)
+            .map(|c| c.id)
+            .collect();
+        crate::changes::file_result(&request.rime_user_dir, &run_id, "running")?;
+        let result = self.execute_files(&request).await;
+        crate::changes::file_result(
+            &request.rime_user_dir,
+            &run_id,
+            if result.is_ok() {
+                "succeeded"
+            } else {
+                "failed"
+            },
+        )?;
+        let mut summary = result?;
+        let after = crate::changes::state(&request.rime_user_dir)?;
+        summary.applied_changes = after
+            .pending_merge
+            .into_iter()
+            .chain(after.pending_deploy)
+            .chain(after.unknown)
+            .filter(|c| !existing.contains(&c.id))
+            .collect();
+        Ok(summary)
+    }
+
+    async fn execute_files(&self, request: &SyncRequest) -> Result<SyncSummary> {
         let remote_url = request
             .remote_url
             .as_deref()
@@ -202,14 +260,14 @@ impl SyncEngine {
 
         if !request.dry_run {
             webdav.ensure_root().await?;
-            crate::cleanup::prune_foreign_cache(&request).await?;
+            crate::cleanup::prune_foreign_cache(request).await?;
         }
 
         match request.mode {
-            SyncMode::Push => self.push(&request, &webdav).await,
-            SyncMode::Pull => self.pull(&request, &webdav).await,
-            SyncMode::Sync => self.sync(&request, &webdav).await,
-            SyncMode::SyncUserDict => self.sync_user_dict(&request, &webdav).await,
+            SyncMode::Push => self.push(request, &webdav).await,
+            SyncMode::Pull => self.pull(request, &webdav).await,
+            SyncMode::Sync => self.sync(request, &webdav).await,
+            SyncMode::SyncUserDict => self.sync_user_dict(request, &webdav).await,
             SyncMode::InitFrost => unreachable!(),
         }
     }

@@ -447,7 +447,7 @@ pub async fn prune_foreign_cache(request: &SyncRequest) -> Result<()> {
             local::read(root, &path, MAX_FILE)? == bytes,
             "快照缓存发生变化"
         );
-        std::fs::remove_file(local::safe_path(root, &path)?)?;
+        crate::changes::apply(root, &path, None, &request.device_id)?;
     }
     for dir in directories::deepest_first(&directories) {
         directories::remove_local(root, dir)?;

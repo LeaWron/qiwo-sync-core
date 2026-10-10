@@ -85,6 +85,8 @@ pub struct SyncSummary {
     pub conflicts_backed_up: u32,
     pub skipped: u32,
     pub messages: Vec<String>,
+    #[serde(rename = "appliedChanges", default)]
+    pub applied_changes: Vec<crate::changes::AppliedChange>,
 }
 
 impl SyncSummary {
@@ -98,6 +100,7 @@ impl SyncSummary {
             conflicts_backed_up: 0,
             skipped: 0,
             messages: Vec::new(),
+            applied_changes: Vec::new(),
         }
     }
 }

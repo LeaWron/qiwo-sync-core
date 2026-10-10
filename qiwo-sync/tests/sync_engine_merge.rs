@@ -271,6 +271,10 @@ fn first_sync_uploads_local_files_and_publishes_a_manifest() {
 
     assert_eq!(summary.uploaded, 2, "{:?}", summary.messages);
     assert_eq!(summary.downloaded, 0);
+    assert!(
+        summary.applied_changes.is_empty(),
+        "uploads do not change local content"
+    );
     assert_eq!(dav.get("default.custom.yaml").unwrap(), "patch:\n  a: 1\n");
     assert_eq!(
         dav.manifest_paths(),
@@ -359,11 +363,66 @@ fn remote_only_file_is_downloaded() {
     let summary = run(SyncMode::Sync, &user_dir, &dav.base_url);
 
     assert_eq!(summary.downloaded, 1, "{:?}", summary.messages);
+    assert_eq!(summary.applied_changes.len(), 1);
+    assert_eq!(
+        summary.applied_changes[0].purpose,
+        qiwo_sync::changes::Purpose::Configuration
+    );
     assert_eq!(
         read(&user_dir, "weasel.custom.yaml"),
         "patch:\n  from: remote\n"
     );
 
+    let unchanged = run(SyncMode::Pull, &user_dir, &dav.base_url);
+    assert!(
+        unchanged.applied_changes.is_empty(),
+        "identical re-download is not a change"
+    );
+    assert_eq!(
+        qiwo_sync::changes::state(&user_dir)
+            .unwrap()
+            .pending_deploy
+            .len(),
+        1,
+        "a later unchanged sync cannot clear a deployment reminder"
+    );
+
+    let _ = std::fs::remove_dir_all(user_dir);
+}
+
+#[test]
+fn partially_failed_download_keeps_actual_configuration_changes_pending() {
+    let dav = DavStub::start();
+    let user_dir = temp_dir("partial-change");
+    dav.put("default.custom.yaml", "applied\n");
+    dav.put(
+        ".qiwo-sync-manifest.json",
+        &manifest_json(&[
+            ("default.custom.yaml", "applied\n"),
+            ("missing.custom.yaml", "missing\n"),
+        ]),
+    );
+    let request = SyncRequest {
+        frontend: Frontend::Weasel,
+        rime_user_dir: user_dir.clone(),
+        remote_url: Some(dav.base_url.clone()),
+        username: None,
+        password: None,
+        device_id: "test-device".into(),
+        mode: SyncMode::Pull,
+        frost_dir: None,
+        dry_run: false,
+    };
+    let result = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(SyncEngine::new().execute(request));
+    assert!(result.is_err());
+    assert_eq!(read(&user_dir, "default.custom.yaml"), "applied\n");
+    let state = qiwo_sync::changes::state(&user_dir).unwrap();
+    assert_eq!(state.pending_deploy.len(), 1);
+    assert_eq!(state.file_sync.unwrap().outcome, "failed");
     let _ = std::fs::remove_dir_all(user_dir);
 }
 

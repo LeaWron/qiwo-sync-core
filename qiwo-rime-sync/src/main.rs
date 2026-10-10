@@ -4,6 +4,7 @@ use clap::{Parser, Subcommand};
 use qiwo_sync::sync_engine::SyncEngine;
 use qiwo_sync::types::{Frontend, SyncMode, SyncRequest};
 
+mod apply_state;
 mod cleanup_task;
 mod configured;
 
@@ -17,6 +18,13 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Native frontend task phases and scoped cancellation.
+    NativeTask(apply_state::NativeArgs),
+    SyncApplyCapability,
+    /// Read durable pending merge/deployment state without mutating user data.
+    SyncState(apply_state::StateArgs),
+    /// Begin or acknowledge a generation-scoped native merge/deployment task.
+    ApplyState(apply_state::ApplyArgs),
     /// Execute a previewed residual cleanup under the native frontend's gate.
     CleanupResiduals(cleanup_task::Args),
     /// Query the management protocol without reading credentials or user data.
@@ -105,6 +113,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     let (mode, args, print_json) = match &cli.command {
+        Command::NativeTask(args) => std::process::exit(apply_state::native(args)?),
+        Command::SyncApplyCapability => {
+            println!("qiwo-sync-apply-v1");
+            return Ok(());
+        }
+        Command::SyncState(args) => std::process::exit(apply_state::state(args)?),
+        Command::ApplyState(args) => std::process::exit(apply_state::apply(args)?),
         Command::CleanupCapability => {
             println!("qiwo-cleanup-v2");
             return Ok(());

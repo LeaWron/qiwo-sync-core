@@ -1,3 +1,4 @@
+pub mod changes;
 pub mod cleanup;
 pub mod file_selector;
 pub mod frost_init;
