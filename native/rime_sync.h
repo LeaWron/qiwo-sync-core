@@ -15,7 +15,7 @@
 
 // Small shared startup hint: pending downloaded configuration must not be
 // silently compiled on restart. Broken/unreadable hints fail closed.
-static inline Bool qiwo_rime_has_pending_deployment(RimeApi* api, const char* root) {
+static inline int qiwo_rime_has_pending_deployment(RIME_FLAVORED(RimeApi)* api, const char* root) {
   const char* suffix = "/.qiwo-sync/deploy-hint.json";
   if (!root || !api) return True;
   size_t length = strlen(root) + strlen(suffix) + 1;
@@ -44,7 +44,7 @@ static inline Bool qiwo_rime_has_pending_deployment(RimeApi* api, const char* ro
   return valid ? pending : True;
 }
 
-static inline Bool qiwo_rime_export_own_snapshots(RimeApi* api) {
+static inline int qiwo_rime_export_own_snapshots(RIME_FLAVORED(RimeApi)* api) {
   if (!api || !RIME_API_AVAILABLE(api, run_task) ||
       !RIME_API_AVAILABLE(api, cleanup_all_sessions) ||
       !RIME_API_AVAILABLE(api, find_module)) return False;
@@ -53,7 +53,7 @@ static inline Bool qiwo_rime_export_own_snapshots(RimeApi* api) {
       !api->run_task("backup_config_files")) return False;
   RimeModule* module = api->find_module("levers");
   if (!module || !module->get_api) return False;
-  RimeLeversApi* levers = (RimeLeversApi*)module->get_api();
+  RIME_FLAVORED(RimeLeversApi)* levers = (RIME_FLAVORED(RimeLeversApi)*)module->get_api();
   if (!levers || !RIME_API_AVAILABLE(levers, backup_user_dict) ||
       !levers->user_dict_iterator_init || !levers->next_user_dict ||
       !levers->user_dict_iterator_destroy) return False;
