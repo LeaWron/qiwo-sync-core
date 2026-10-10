@@ -23,7 +23,7 @@ pub async fn run(args: &Args) -> i32 {
         eprintln!("Invalid cleanup request");
         return 3;
     }
-    let result = async {
+    let task = async {
         let a = &args.sync;
         let request = SyncRequest {
             frontend: super::parse_frontend(&a.frontend).map_err(anyhow::Error::msg)?,
@@ -47,9 +47,28 @@ pub async fn run(args: &Args) -> i32 {
         };
         anyhow::ensure!(&plan.id == id, "Cleanup request identity differs");
         qiwo_sync::lifecycle::job::run(&request, &job).await
-    }
-    .await;
-    let reply = serde_json::json!({"ok": result.is_ok(), "message": result.as_ref().err().map(|_| "清理未完成，请重新扫描并核对备份")});
+    };
+    let cancellation = async {
+        let path = format!(".qiwo-sync/managed-requests/{id}.cancel");
+        loop {
+            if local::safe_path(&args.sync.rime_user_dir, &path).is_ok_and(|path| path.exists()) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    };
+    let (result, cancelled) = tokio::select! {
+        biased;
+        _ = cancellation => (Err(anyhow::anyhow!("Cleanup cancelled")), true),
+        result = task => (result, false),
+    };
+    let message = if cancelled {
+        "任务已取消，已完成的清理不会回滚，请重新扫描并核对备份"
+    } else {
+        "清理未完成，请重新扫描并核对备份"
+    };
+    let reply = serde_json::json!({"ok": result.is_ok(), "cancelled":cancelled,
+        "message": result.as_ref().err().map(|_| message)});
     if local::atomic_write(
         &args.sync.rime_user_dir,
         &format!(".qiwo-sync/managed-requests/{id}.result.json"),

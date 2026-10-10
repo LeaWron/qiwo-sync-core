@@ -106,7 +106,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let (mode, args, print_json) = match &cli.command {
         Command::CleanupCapability => {
-            println!("qiwo-cleanup-v1");
+            println!("qiwo-cleanup-v2");
             return Ok(());
         }
         Command::CleanupResiduals(args) => std::process::exit(cleanup_task::run(args).await),
