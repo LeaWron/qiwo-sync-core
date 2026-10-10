@@ -49,6 +49,9 @@ static inline int qiwo_rime_export_own_snapshots(RIME_FLAVORED(RimeApi)* api) {
       !RIME_API_AVAILABLE(api, cleanup_all_sessions) ||
       !RIME_API_AVAILABLE(api, find_module)) return False;
   api->cleanup_all_sessions();
+  // A normal input engine may not have loaded the deployer/lever modules yet.
+  // This loads task registrations; it does not start workspace compilation.
+  if (RIME_API_AVAILABLE(api, deployer_initialize)) api->deployer_initialize(NULL);
   if (!api->run_task("installation_update") ||
       !api->run_task("backup_config_files")) return False;
   RimeModule* module = api->find_module("levers");
