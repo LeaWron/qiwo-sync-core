@@ -154,6 +154,61 @@ fn notifications_only_claim_new_deployment_changes_and_do_not_acknowledge_them()
 }
 
 #[test]
+fn deployment_hint_survives_failure_and_preserves_new_generations() {
+    let root = Root::new();
+    root.put("default.custom.yaml", b"first");
+    let hint = || {
+        serde_json::from_slice::<serde_json::Value>(
+            &fs::read(root.0.join(".qiwo-sync/deploy-hint.json")).unwrap(),
+        )
+        .unwrap()
+    };
+    assert_eq!(hint()["hasPendingDeploy"], true);
+    let failed = changes::begin(&root.0, ApplyKind::Deploy).unwrap();
+    changes::complete(&root.0, &failed.id, "failed").unwrap();
+    assert_eq!(hint()["hasPendingDeploy"], true);
+    let task = changes::begin(&root.0, ApplyKind::Deploy).unwrap();
+    root.put("default.custom.yaml", b"second");
+    changes::complete(&root.0, &task.id, "succeeded").unwrap();
+    assert_eq!(hint()["hasPendingDeploy"], true);
+    let task = changes::begin(&root.0, ApplyKind::Deploy).unwrap();
+    changes::complete(&root.0, &task.id, "succeeded").unwrap();
+    assert_eq!(hint()["hasPendingDeploy"], false);
+}
+
+#[test]
+fn orphaned_owner_is_reported_as_interrupted_after_restart() {
+    let root = Root::new();
+    let task = changes::native_task(&root.0, None, Some("merging"), false).unwrap();
+    let mut data = serde_json::to_value(task).unwrap();
+    data["ownerStamp"] = serde_json::json!("a different process creation identity");
+    fs::write(
+        root.0.join(".qiwo-sync/native-task.json"),
+        serde_json::to_vec(&data).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        changes::state(&root.0).unwrap().native_task.unwrap().phase,
+        "interrupted"
+    );
+    root.put("sync/old/words.userdb.txt", b"still pending");
+    assert_eq!(changes::state(&root.0).unwrap().pending_merge.len(), 1);
+}
+
+#[test]
+fn completed_metadata_history_stays_bounded_without_clearing_pending_files() {
+    let root = Root::new();
+    root.put("default.custom.yaml", b"pending");
+    for _ in 0..24 {
+        let task = changes::begin(&root.0, ApplyKind::Deploy).unwrap();
+        changes::complete(&root.0, &task.id, "failed").unwrap();
+    }
+    let state = changes::state(&root.0).unwrap();
+    assert_eq!(state.apply_tasks.len(), 16);
+    assert_eq!(state.pending_deploy.len(), 1);
+}
+
+#[test]
 fn unacknowledged_native_work_survives_restart_and_intents_require_applied_bytes() {
     let root = Root::new();
     root.put("default.custom.yaml", b"applied");

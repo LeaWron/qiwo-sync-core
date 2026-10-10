@@ -7,6 +7,7 @@ pub mod inventory;
 pub mod lifecycle;
 pub mod operation;
 mod paths;
+mod process_owner;
 pub mod sync_engine;
 pub mod types;
 pub mod webdav_client;

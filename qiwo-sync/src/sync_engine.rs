@@ -222,6 +222,7 @@ impl SyncEngine {
             .collect();
         crate::changes::file_result(&request.rime_user_dir, &run_id, "running")?;
         let result = self.execute_files(&request).await;
+        crate::changes::update_deploy_hint(&request.rime_user_dir)?;
         crate::changes::file_result(
             &request.rime_user_dir,
             &run_id,

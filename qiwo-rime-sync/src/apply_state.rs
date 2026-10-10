@@ -3,6 +3,8 @@ use qiwo_sync::changes::{self, ApplyKind};
 #[derive(clap::Args)]
 pub struct NativeArgs {
     #[arg(long)]
+    pub owner_pid: Option<u32>,
+    #[arg(long)]
     pub rime_user_dir: PathBuf,
     #[arg(long)]
     pub id: Option<String>,
@@ -17,11 +19,12 @@ pub fn native(args: &NativeArgs) -> anyhow::Result<i32> {
     } else {
         None
     };
-    let task = changes::native_task(
+    let task = changes::native_task_owned(
         &args.rime_user_dir,
         args.id.as_deref(),
         args.phase.as_deref(),
         args.cancel,
+        args.owner_pid,
     )?;
     println!("{}", task.id);
     Ok(0)

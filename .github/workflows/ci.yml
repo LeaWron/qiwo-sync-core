@@ -27,6 +27,13 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
 
+      - name: Native export-only contract
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends librime-dev
+          cc -std=c11 -Wall -Wextra -Werror native/tests/export_only.c -o /tmp/qiwo-export-only
+          /tmp/qiwo-export-only
+
       - name: Test (workspace)
         run: cargo test --workspace
 

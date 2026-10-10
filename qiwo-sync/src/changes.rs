@@ -144,6 +144,13 @@ pub fn apply(
     if purpose != Purpose::Internal {
         local::atomic_write(root, &event, &serde_json::to_vec(&change)?)?;
     }
+    if ApplyKind::Deploy.accepts(purpose) {
+        local::atomic_write(
+            root,
+            ".qiwo-sync/deploy-hint.json",
+            b"{\"hasPendingDeploy\":true}",
+        )?;
+    }
     if let Some(staged) = staged {
         fs::create_dir_all(target.parent().unwrap())?;
         fs::rename(staged, &target)?;
@@ -226,16 +233,18 @@ fn records<T: serde::de::DeserializeOwned>(root: &Path, directory: &str) -> Resu
         }
     }
     names.sort();
-    names
-        .into_iter()
-        .map(|name| {
-            Ok(serde_json::from_slice(&local::read(
-                root,
-                &format!("{directory}/{name}"),
-                MAX_STATE,
-            )?)?)
-        })
-        .collect()
+    let mut result = Vec::new();
+    for name in names {
+        match local::read(root, &format!("{directory}/{name}"), MAX_STATE) {
+            Ok(bytes) => result.push(serde_json::from_slice(&bytes)?),
+            Err(error)
+                if error
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(result)
 }
 pub fn valid_id(id: &str) -> bool {
     id.len() == 64
@@ -256,6 +265,17 @@ pub fn state(root: &Path) -> Result<PendingState> {
         ..Default::default()
     };
     result.native_task = native_state(root)?;
+    if let Some(task) = &mut result.native_task {
+        let active = !matches!(task.phase.as_str(), "succeeded" | "failed" | "cancelled");
+        if active
+            && task
+                .owner_pid
+                .zip(task.owner_stamp.as_ref())
+                .is_none_or(|(pid, stamp)| crate::process_owner::stamp(pid).as_ref() != Some(stamp))
+        {
+            task.phase = "interrupted".into();
+        }
+    }
     for mut change in records::<AppliedChange>(root, EVENTS)? {
         ensure!(
             valid_id(&change.id) && crate::inventory::valid_path(&change.path),
@@ -293,7 +313,8 @@ pub fn state(root: &Path) -> Result<PendingState> {
     {
         match &result.native_task {
             Some(task)
-                if task.id == *parent && matches!(task.phase.as_str(), "failed" | "cancelled") =>
+                if task.id == *parent
+                    && matches!(task.phase.as_str(), "failed" | "cancelled" | "interrupted") =>
             {
                 file.outcome.clone_from(&task.phase)
             }
@@ -339,7 +360,54 @@ pub fn complete(root: &Path, id: &str, outcome: &str) -> Result<()> {
         "Apply task already completed"
     );
     task.outcome = outcome.into();
-    local::atomic_write(root, &path, &serde_json::to_vec(&task)?)
+    local::atomic_write(root, &path, &serde_json::to_vec(&task)?)?;
+    if outcome == "succeeded" {
+        // The acknowledgement is durable before compaction. Never delete an
+        // event that appeared after this task's captured generation.
+        for event_id in &task.changes {
+            ensure!(valid_id(event_id), "Invalid acknowledged event ID");
+            let event = local::safe_path(root, &format!("{EVENTS}/{event_id}.json"))?;
+            if event.exists() {
+                let _ = fs::remove_file(event);
+            }
+        }
+        update_deploy_hint(root)?;
+    }
+    compact_tasks(root)?;
+    Ok(())
+}
+
+pub fn update_deploy_hint(root: &Path) -> Result<()> {
+    let pending = !state(root)?.pending_deploy.is_empty();
+    local::atomic_write(
+        root,
+        ".qiwo-sync/deploy-hint.json",
+        &serde_json::to_vec(&serde_json::json!({"hasPendingDeploy":pending}))?,
+    )
+}
+fn compact_tasks(root: &Path) -> Result<()> {
+    let mut tasks: Vec<ApplyTask> = records(root, TASKS)?;
+    tasks.sort_by_key(|t| std::cmp::Reverse(t.started_at_utc));
+    for kind in [ApplyKind::Merge, ApplyKind::Deploy] {
+        for task in tasks
+            .iter()
+            .filter(|t| t.kind == kind && t.outcome != "running")
+            .skip(16)
+        {
+            if task.outcome == "succeeded"
+                && task.changes.iter().any(|id| {
+                    local::safe_path(root, &format!("{EVENTS}/{id}.json")).is_ok_and(|p| p.exists())
+                })
+            {
+                continue;
+            }
+            let _ = fs::remove_file(local::safe_path(
+                root,
+                &format!("{TASKS}/{}.json", task.id),
+            )?);
+        }
+    }
+    Ok(())
 }
 pub fn file_result(root: &Path, id: &str, outcome: &str) -> Result<()> {
     ensure!(
@@ -362,6 +430,12 @@ pub fn file_result(root: &Path, id: &str, outcome: &str) -> Result<()> {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NativeTask {
+    #[serde(default)]
+    pub owner_pid: Option<u32>,
+    #[serde(default)]
+    pub owner_stamp: Option<String>,
+    #[serde(default)]
+    pub error_stage: Option<String>,
     #[serde(default = "sync_kind")]
     pub kind: String,
     pub id: String,
@@ -407,6 +481,15 @@ pub fn native_task(
     phase: Option<&str>,
     cancel: bool,
 ) -> Result<NativeTask> {
+    native_task_owned(root, id, phase, cancel, None)
+}
+pub fn native_task_owned(
+    root: &Path,
+    id: Option<&str>,
+    phase: Option<&str>,
+    cancel: bool,
+    owner_pid: Option<u32>,
+) -> Result<NativeTask> {
     // Separate from the file-operation lock: cancellation must work while the
     // network process owns that lock. Only short metadata writes are serialized.
     let path = local::safe_path(root, ".qiwo-sync/native-state.lock")?;
@@ -425,7 +508,13 @@ pub fn native_task(
             ensure!(task.id == id, "Native task changed");
             task
         } else {
+            let owner_pid = owner_pid.unwrap_or_else(std::process::id);
+            let owner_stamp = crate::process_owner::stamp(owner_pid)
+                .ok_or_else(|| anyhow::anyhow!("Native task owner is not running"))?;
             NativeTask {
+                owner_pid: Some(owner_pid),
+                owner_stamp: Some(owner_stamp),
+                error_stage: None,
                 kind: if phase == Some("waiting-deploy") {
                     "deploy"
                 } else if phase == Some("waiting-merge") {
@@ -456,6 +545,9 @@ pub fn native_task(
                 ),
                 "Invalid native phase"
             );
+            if matches!(phase, "failed" | "cancelled") {
+                task.error_stage = Some(task.phase.clone());
+            }
             task.phase = phase.into();
         }
         if cancel {
