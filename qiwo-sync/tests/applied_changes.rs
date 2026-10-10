@@ -1,5 +1,26 @@
 use qiwo_sync::changes::{self, ApplyKind, Purpose};
 use std::{fs, path::PathBuf};
+
+#[test]
+fn sync_future_can_run_on_the_desktop_background_executor() {
+    use qiwo_sync::{
+        sync_engine::SyncEngine,
+        types::{Frontend, SyncMode, SyncRequest},
+    };
+    fn assert_send<T: Send>(_: T) {}
+    let engine = SyncEngine::new();
+    assert_send(engine.execute(SyncRequest {
+        frontend: Frontend::Weasel,
+        rime_user_dir: PathBuf::from("/unused"),
+        remote_url: None,
+        username: None,
+        password: None,
+        device_id: "unused".into(),
+        mode: SyncMode::Sync,
+        frost_dir: None,
+        dry_run: true,
+    }));
+}
 struct Root(PathBuf);
 impl Root {
     fn new() -> Self {

@@ -107,28 +107,39 @@ async fn execute_plan(
     plan: &[TransferAction],
 ) -> Result<()> {
     use futures_util::stream::StreamExt;
-    let outcomes = futures_util::stream::iter(plan.iter().map(|action| async move {
-        match action {
-            TransferAction::Upload(path) => webdav.put_file(path, &rime_user_dir.join(path)).await,
-            TransferAction::Download(path) | TransferAction::ResolveConflict(path) => {
-                let actor = crate::installation::installed_device_id(rime_user_dir)?;
-                let staging = crate::lifecycle::local::safe_path(
-                    rime_user_dir,
-                    &format!(".qiwo-sync/downloads/{}", crate::lifecycle::random_id()?),
-                )?;
-                if matches!(action, TransferAction::ResolveConflict(_)) {
-                    backup_local_file(rime_user_dir, path).await?;
+    let jobs = plan
+        .iter()
+        .cloned()
+        .map(|action| {
+            let rime_user_dir = rime_user_dir.to_owned();
+            let webdav = webdav.clone();
+            async move {
+                match &action {
+                    TransferAction::Upload(path) => {
+                        webdav.put_file(path, &rime_user_dir.join(path)).await
+                    }
+                    TransferAction::Download(path) | TransferAction::ResolveConflict(path) => {
+                        let actor = crate::installation::installed_device_id(&rime_user_dir)?;
+                        let staging = crate::lifecycle::local::safe_path(
+                            &rime_user_dir,
+                            &format!(".qiwo-sync/downloads/{}", crate::lifecycle::random_id()?),
+                        )?;
+                        if matches!(action, TransferAction::ResolveConflict(_)) {
+                            backup_local_file(&rime_user_dir, path).await?;
+                        }
+                        webdav.download_file(path, &staging).await?;
+                        // No await between the durable intent and local replacement.
+                        crate::changes::apply(&rime_user_dir, path, Some(&staging), &actor)?;
+                        Ok(())
+                    }
                 }
-                webdav.download_file(path, &staging).await?;
-                // No await between the durable intent and local replacement.
-                crate::changes::apply(rime_user_dir, path, Some(&staging), &actor)?;
-                Ok(())
             }
-        }
-    }))
-    .buffer_unordered(TRANSFER_CONCURRENCY)
-    .collect::<Vec<Result<()>>>()
-    .await;
+        })
+        .collect::<Vec<_>>();
+    let outcomes = futures_util::stream::iter(jobs)
+        .buffer_unordered(TRANSFER_CONCURRENCY)
+        .collect::<Vec<Result<()>>>()
+        .await;
     for outcome in outcomes {
         outcome?;
     }

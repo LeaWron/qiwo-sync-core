@@ -37,6 +37,7 @@ fn mkcol() -> Method {
     Method::from_bytes(b"MKCOL").expect("MKCOL is a valid method name")
 }
 
+#[derive(Clone)]
 pub struct WebDavClient {
     client: reqwest::Client,
     base_url: String,
